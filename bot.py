@@ -47,6 +47,13 @@ def format_duration(started_at):
     return ", ".join(parts[:2])
 
 
+def format_afk_reason(reason):
+    if not reason:
+        return ""
+
+    return f"\nReason: {reason}"
+
+
 def format_afk_pings(pings):
     if not pings:
         return "Nobody pinged you while you were AFK."
@@ -64,7 +71,7 @@ def format_afk_pings(pings):
     return "\n".join(lines)
 
 
-async def set_afk(member):
+async def set_afk(member, reason=None):
     original_nick = member.nick
     display_name = member.display_name
 
@@ -77,7 +84,8 @@ async def set_afk(member):
     afk_users[member.id] = {
         "nick": original_nick,
         "since": datetime.now(timezone.utc),
-        "pings": []
+        "pings": [],
+        "reason": reason
     }
 
 
@@ -91,9 +99,10 @@ async def remove_afk(member):
 
 
 class AFKConfirmView(discord.ui.View):
-    def __init__(self, member):
+    def __init__(self, member, reason=None):
         super().__init__(timeout=30)
         self.member = member
+        self.reason = reason
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.member.id:
@@ -108,7 +117,7 @@ class AFKConfirmView(discord.ui.View):
     @discord.ui.button(label="Yes", style=discord.ButtonStyle.success)
     async def confirm_afk(self, interaction, button):
         try:
-            await set_afk(self.member)
+            await set_afk(self.member, self.reason)
         except discord.Forbidden:
             await interaction.response.edit_message(
                 content="I need permission to manage nicknames before I can set AFK.",
@@ -123,7 +132,7 @@ class AFKConfirmView(discord.ui.View):
             return
 
         await interaction.response.edit_message(
-            content=f"{self.member.mention} is now AFK.",
+            content=f"{self.member.mention} is now AFK.{format_afk_reason(self.reason)}",
             view=None
         )
 
@@ -147,28 +156,33 @@ async def on_message(message):
 
     msg = message.content.lower()
 
-    if msg == "afk":
+    if msg == "afk" or msg.startswith("afk "):
         if not message.guild:
             await message.channel.send("AFK nickname changes only work inside a server.")
             return
 
+        afk_reason = message.content[3:].strip() or None
+        reason_text = format_afk_reason(afk_reason)
         await message.channel.send(
-            f"{message.author.mention} are you going AFK?",
-            view=AFKConfirmView(message.author)
+            f"{message.author.mention} are you going AFK?{reason_text}",
+            view=AFKConfirmView(message.author, afk_reason)
         )
         return
 
     if message.guild and message.author.id in afk_users:
         afk_data = afk_users[message.author.id]
         afk_duration = format_duration(afk_data["since"])
+        reason_text = format_afk_reason(afk_data.get("reason"))
         ping_summary = format_afk_pings(afk_data["pings"])
 
         try:
             afk_data = await remove_afk(message.author)
             afk_duration = format_duration(afk_data["since"])
+            reason_text = format_afk_reason(afk_data.get("reason"))
             ping_summary = format_afk_pings(afk_data["pings"])
             await message.channel.send(
-                f"Welcome back {message.author.mention}, you were AFK for {afk_duration}.\n"
+                f"Welcome back {message.author.mention}, you were AFK for {afk_duration}."
+                f"{reason_text}\n"
                 f"{ping_summary}"
             )
         except discord.Forbidden:
@@ -176,12 +190,14 @@ async def on_message(message):
             await message.channel.send(
                 f"Welcome back {message.author.mention}, you were AFK for {afk_duration}. "
                 "I could not restore your nickname.\n"
+                f"{reason_text}\n"
                 f"{ping_summary}"
             )
         except discord.HTTPException:
             await message.channel.send(
                 f"Welcome back {message.author.mention}, you were AFK for {afk_duration}. "
                 "I could not restore your nickname right now.\n"
+                f"{reason_text}\n"
                 f"{ping_summary}"
             )
 
@@ -200,6 +216,7 @@ async def on_message(message):
         if mentioned_user.id in afk_users:
             afk_data = afk_users[mentioned_user.id]
             afk_duration = format_duration(afk_data["since"])
+            reason_text = format_afk_reason(afk_data.get("reason"))
             afk_data["pings"].append({
                 "by": message.author.display_name,
                 "url": message.jump_url,
@@ -207,6 +224,7 @@ async def on_message(message):
             })
             await message.channel.send(
                 f"{mentioned_user.mention} is AFK right now. AFK for {afk_duration}."
+                f"{reason_text}"
             )
             continue
 
