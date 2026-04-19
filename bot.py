@@ -800,7 +800,12 @@ async def on_wavelink_track_end(payload):
     guild_id = payload.player.guild.id if payload.player.guild else None
 
     if guild_id and music_loop_enabled.get(guild_id) and payload.track:
-        await payload.player.play(payload.track)
+        try:
+            payload.player.queue.put(payload.track)
+        except Exception:
+            pass
+        
+        await play_next(payload.player)
         return
 
     await play_next(payload.player)
