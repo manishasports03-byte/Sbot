@@ -1,6 +1,8 @@
 import discord
 from discord.ext import commands
 from datetime import datetime, timezone
+from spotipy.oauth2 import SpotifyClientCredentials
+import spotipy
 import wavelink
 import random
 import os
@@ -25,6 +27,7 @@ responses = [
 
 afk_users = {}
 MAX_AFK_PINGS_TO_SHOW = 5
+MAX_SPOTIFY_PLAYLIST_TRACKS = 50
 lavalink_connected = False
 
 
@@ -177,6 +180,78 @@ def format_track(track):
     return track.title
 
 
+def is_spotify_url(query):
+    lowered = query.lower()
+    return "open.spotify.com/" in lowered or lowered.startswith("spotify:")
+
+
+def get_spotify_client():
+    client_id = os.getenv("SPOTIFY_CLIENT_ID")
+    client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
+
+    if not client_id or not client_secret:
+        return None
+
+    auth = SpotifyClientCredentials(client_id=client_id, client_secret=client_secret)
+    return spotipy.Spotify(auth_manager=auth)
+
+
+def spotify_track_to_search(track):
+    artists = ", ".join(artist["name"] for artist in track.get("artists", []))
+    return f"{track['name']} {artists}".strip()
+
+
+def resolve_spotify_url(query):
+    spotify = get_spotify_client()
+
+    if not spotify:
+        raise RuntimeError("Spotify API credentials are missing.")
+
+    lowered = query.lower()
+    clean_query = query.split("?")[0]
+
+    if "/track/" in lowered or lowered.startswith("spotify:track:"):
+        track = spotify.track(clean_query)
+        return "track", [spotify_track_to_search(track)]
+
+    if "/album/" in lowered or lowered.startswith("spotify:album:"):
+        album = spotify.album(clean_query)
+        searches = [
+            spotify_track_to_search(track)
+            for track in album["tracks"]["items"][:MAX_SPOTIFY_PLAYLIST_TRACKS]
+        ]
+        return "album", searches
+
+    if "/playlist/" in lowered or lowered.startswith("spotify:playlist:"):
+        searches = []
+        results = spotify.playlist_items(
+            clean_query,
+            additional_types=("track",),
+            limit=100
+        )
+
+        while results and len(searches) < MAX_SPOTIFY_PLAYLIST_TRACKS:
+            for item in results["items"]:
+                track = item.get("track")
+                if not track or track.get("is_local"):
+                    continue
+
+                searches.append(spotify_track_to_search(track))
+
+                if len(searches) >= MAX_SPOTIFY_PLAYLIST_TRACKS:
+                    break
+
+            results = spotify.next(results) if results.get("next") else None
+
+        return "playlist", searches
+
+    raise RuntimeError("That Spotify link type is not supported yet.")
+
+
+async def resolve_spotify_url_async(query):
+    return await bot.loop.run_in_executor(None, resolve_spotify_url, query)
+
+
 def build_music_search_query(query):
     lowered = query.lower()
     search_prefixes = ("scsearch:", "ytsearch:", "ytmsearch:", "amsearch:", "spsearch:")
@@ -305,6 +380,59 @@ async def play_next(player):
     await player.play(next_track)
 
 
+async def search_best_track(query):
+    tracks = await wavelink.Playable.search(build_music_search_query(query))
+
+    print(f"Tracks found: {len(tracks)}")
+
+    if not tracks or isinstance(tracks, wavelink.Playlist):
+        return None
+
+    for index, found_track in enumerate(tracks[:5], start=1):
+        print(
+            f"Result {index}: {found_track.title} - {found_track.author} "
+            f"(score {official_track_score(found_track)})"
+        )
+
+    return pick_best_track(tracks)
+
+
+async def queue_spotify_tracks(ctx, player, searches, source_type):
+    if not searches:
+        await ctx.send("\u274c No Spotify tracks found.")
+        return
+
+    queued = 0
+    first_track = None
+
+    await ctx.send(f"Loading Spotify {source_type}...")
+
+    for search in searches:
+        try:
+            track = await search_best_track(search)
+        except wavelink.LavalinkLoadException:
+            continue
+
+        if not track:
+            continue
+
+        if not first_track and not player.playing and not player.paused:
+            first_track = track
+        else:
+            player.queue.put(track)
+            queued += 1
+
+    if first_track:
+        await player.play(first_track)
+        await ctx.send(f"\U0001f3b6 Playing: {first_track.title}")
+
+    if queued:
+        await ctx.send(f"Queued {queued} track{'s' if queued != 1 else ''} from Spotify.")
+
+    if not first_track and not queued:
+        await ctx.send("\u274c I could not match those Spotify tracks on YouTube Music.")
+
+
 class AFKConfirmView(discord.ui.View):
     def __init__(self, member, reason=None):
         super().__init__(timeout=30)
@@ -383,6 +511,19 @@ async def play_command(ctx, *, query=None):
 
     player = await get_or_connect_player(ctx)
     if not player:
+        return
+
+    if is_spotify_url(query):
+        try:
+            source_type, searches = await resolve_spotify_url_async(query)
+        except RuntimeError as exc:
+            await ctx.send(f"Spotify link support needs setup: {exc}")
+            return
+        except spotipy.SpotifyException:
+            await ctx.send("Spotify could not read that link.")
+            return
+
+        await queue_spotify_tracks(ctx, player, searches, source_type)
         return
 
     search_query = build_music_search_query(query)
