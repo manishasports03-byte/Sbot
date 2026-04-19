@@ -323,8 +323,10 @@ async def play_command(ctx, *, query=None):
     if not player:
         return
 
+    search_query = query if query.lower().startswith("scsearch:") else f"scsearch:{query}"
+
     try:
-        tracks = await wavelink.Playable.search(f"scsearch:{query}")
+        tracks = await wavelink.Playable.search(search_query)
     except wavelink.LavalinkLoadException:
         await ctx.send("Lavalink could not load that track.")
         return
@@ -332,8 +334,10 @@ async def play_command(ctx, *, query=None):
         await ctx.send("Lavalink is not connected yet.")
         return
 
+    print(f"Tracks found: {len(tracks)}")
+
     if not tracks:
-        await ctx.send("No tracks found.")
+        await ctx.send("\u274c No songs found.")
         return
 
     if isinstance(tracks, wavelink.Playlist):
@@ -346,6 +350,8 @@ async def play_command(ctx, *, query=None):
 
     if not player.playing:
         await play_next(player)
+        if player.current:
+            await ctx.send(f"\U0001f3b6 Playing: {player.current.title}")
 
 
 @bot.command(name="pause")
