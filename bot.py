@@ -180,6 +180,11 @@ def format_track(track):
     return track.title
 
 
+async def send_notice(ctx, message):
+    embed = discord.Embed(description=message, color=discord.Color.dark_gray())
+    await ctx.send(embed=embed)
+
+
 def is_spotify_url(query):
     lowered = query.lower()
     return "open.spotify.com/" in lowered or lowered.startswith("spotify:")
@@ -351,7 +356,7 @@ def get_player(ctx):
 
 async def get_or_connect_player(ctx):
     if not ctx.author.voice or not ctx.author.voice.channel:
-        await ctx.send("Join a voice channel first.")
+        await send_notice(ctx, "Join a voice channel first.")
         return None
 
     player = get_player(ctx)
