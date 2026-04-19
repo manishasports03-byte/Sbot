@@ -29,6 +29,8 @@ afk_users = {}
 MAX_AFK_PINGS_TO_SHOW = 5
 MAX_SPOTIFY_PLAYLIST_TRACKS = 50
 lavalink_connected = False
+music_loop_enabled = {}
+music_requesters = {}
 
 
 def format_duration(started_at):
@@ -178,6 +180,43 @@ def format_track(track):
         return f"[{track.title}]({track.uri})"
 
     return track.title
+
+
+def format_track_duration(track):
+    total_seconds = int((track.length or 0) / 1000)
+    minutes, seconds = divmod(total_seconds, 60)
+    return f"{minutes}:{seconds:02d}"
+
+
+def set_track_requester(ctx, track):
+    music_requesters[getattr(track, "identifier", track.title)] = ctx.author.display_name
+
+
+def get_track_requester(track):
+    return music_requesters.get(getattr(track, "identifier", track.title), "Unknown")
+
+
+def build_track_queued_embed(track):
+    embed = discord.Embed(title="Track Queued", color=discord.Color.dark_gray())
+    embed.description = (
+        f"\u2705 {format_track(track)} added to queue. "
+        f"Artist: `{track.author}`"
+    )
+    return embed
+
+
+def build_now_playing_embed(track):
+    embed = discord.Embed(title="\U0001f4bf Now Playing", color=discord.Color.dark_gray())
+    embed.description = (
+        f"{format_track(track)} - `{track.author}`\n"
+        f"Duration: `{format_track_duration(track)}`\n"
+        f"Requested by _{get_track_requester(track)}_"
+    )
+
+    if track.artwork:
+        embed.set_thumbnail(url=track.artwork)
+
+    return embed
 
 
 async def send_notice(ctx, message):
@@ -434,6 +473,8 @@ async def queue_spotify_tracks(ctx, player, searches, source_type):
         if not track:
             continue
 
+        set_track_requester(ctx, track)
+
         if not first_track and not player.playing and not player.paused:
             first_track = track
         else:
@@ -442,13 +483,83 @@ async def queue_spotify_tracks(ctx, player, searches, source_type):
 
     if first_track:
         await player.play(first_track)
-        await ctx.send(f"\U0001f3b6 Playing: {first_track.title}")
+        await ctx.send(embed=build_now_playing_embed(first_track), view=NowPlayingView())
 
     if queued:
         await ctx.send(f"Queued {queued} track{'s' if queued != 1 else ''} from Spotify.")
 
     if not first_track and not queued:
         await ctx.send("\u274c I could not match those Spotify tracks on YouTube Music.")
+
+
+class NowPlayingView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+
+    def get_player(self, interaction):
+        player = interaction.guild.voice_client if interaction.guild else None
+
+        if not isinstance(player, wavelink.Player):
+            return None
+
+        return player
+
+    @discord.ui.button(label="Pause", style=discord.ButtonStyle.secondary)
+    async def pause_button(self, interaction, button):
+        player = self.get_player(interaction)
+
+        if not player or not player.current:
+            await interaction.response.send_message("Nothing is playing right now.", ephemeral=True)
+            return
+
+        await player.pause(not player.paused)
+        button.label = "Resume" if player.paused else "Pause"
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="Skip", style=discord.ButtonStyle.secondary)
+    async def skip_button(self, interaction, button):
+        player = self.get_player(interaction)
+
+        if not player or not player.current:
+            await interaction.response.send_message("Nothing is playing right now.", ephemeral=True)
+            return
+
+        await player.skip(force=True)
+        await interaction.response.send_message("Skipped.", ephemeral=True)
+
+    @discord.ui.button(label="Stop", style=discord.ButtonStyle.danger)
+    async def stop_button(self, interaction, button):
+        player = self.get_player(interaction)
+
+        if not player:
+            await interaction.response.send_message("I am not playing anything.", ephemeral=True)
+            return
+
+        player.queue.clear()
+        await player.stop()
+        await interaction.response.send_message("Stopped and cleared the queue.", ephemeral=True)
+
+    @discord.ui.button(label="Loop", style=discord.ButtonStyle.secondary)
+    async def loop_button(self, interaction, button):
+        if not interaction.guild:
+            await interaction.response.send_message("Loop only works inside a server.", ephemeral=True)
+            return
+
+        guild_id = interaction.guild.id
+        music_loop_enabled[guild_id] = not music_loop_enabled.get(guild_id, False)
+        state = "enabled" if music_loop_enabled[guild_id] else "disabled"
+        await interaction.response.send_message(f"Loop {state}.", ephemeral=True)
+
+    @discord.ui.button(label="Shuffle", style=discord.ButtonStyle.secondary)
+    async def shuffle_button(self, interaction, button):
+        player = self.get_player(interaction)
+
+        if not player or player.queue.is_empty:
+            await interaction.response.send_message("The queue is currently empty.", ephemeral=True)
+            return
+
+        player.queue.shuffle()
+        await interaction.response.send_message("Queue shuffled.", ephemeral=True)
 
 
 class AFKConfirmView(discord.ui.View):
@@ -510,6 +621,12 @@ async def on_ready():
 
 @bot.event
 async def on_wavelink_track_end(payload):
+    guild_id = payload.player.guild.id if payload.player.guild else None
+
+    if guild_id and music_loop_enabled.get(guild_id) and payload.track:
+        await payload.player.play(payload.track)
+        return
+
     await play_next(payload.player)
 
 
@@ -579,18 +696,20 @@ async def play_command(ctx, *, query=None):
             )
 
         track = pick_best_track(tracks)
+        set_track_requester(ctx, track)
 
         if player.playing or player.paused:
             player.queue.put(track)
-            await ctx.send(f"Queued {format_track(track)}.")
+            await ctx.send(embed=build_track_queued_embed(track))
         else:
+            await ctx.send(embed=build_track_queued_embed(track))
             await player.play(track)
-            await ctx.send(f"\U0001f3b6 Playing: {track.title}")
+            await ctx.send(embed=build_now_playing_embed(track), view=NowPlayingView())
 
     if isinstance(tracks, wavelink.Playlist) and not player.playing:
         await play_next(player)
         if player.current:
-            await ctx.send(f"\U0001f3b6 Playing: {player.current.title}")
+            await ctx.send(embed=build_now_playing_embed(player.current), view=NowPlayingView())
 
 
 @bot.command(name="pause")
@@ -662,7 +781,7 @@ async def nowplaying_command(ctx):
         await ctx.send("Nothing is playing right now.")
         return
 
-    await ctx.send(f"Now playing: {format_track(player.current)}")
+    await ctx.send(embed=build_now_playing_embed(player.current), view=NowPlayingView())
 
 
 @bot.command(name="queue", aliases=["q"])
@@ -674,7 +793,7 @@ async def queue_command(ctx):
         return
 
     if player.queue.is_empty:
-        await ctx.send("Queue is empty.")
+        await send_notice(ctx, "The queue is currently empty.")
         return
 
     tracks = list(player.queue)[:10]
