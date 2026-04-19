@@ -265,12 +265,6 @@ async def send_success(ctx, message):
     await ctx.send(embed=embed)
 
 
-async def send_prefix_card(message):
-    embed = discord.Embed(title=bot.user.display_name, color=discord.Color.dark_gray())
-    embed.description = "My commands work without a prefix. Use `help` to see all commands."
-    await message.channel.send(embed=embed)
-
-
 async def send_bot_info(ctx):
     guild_id = ctx.guild.id if ctx.guild else "DM"
     embed = discord.Embed(title=f"{bot.user.display_name} Music", color=discord.Color.dark_gray())
@@ -280,7 +274,7 @@ async def send_bot_info(ctx):
         "Prefix : `none`\n"
         "Language : Eng\n"
         f"Server Id : `{guild_id}`\n\n"
-        "Made with \u2764 by @karma.ly"
+        "Made with \u2764 by @_anuneet1x"
     )
 
     if bot.user.display_avatar:
@@ -977,7 +971,8 @@ async def on_message(message):
         cleaned = cleaned.replace(nickname_mention, "").strip()
 
         if not cleaned:
-            await send_prefix_card(message)
+            ctx = await bot.get_context(message)
+            await send_bot_info(ctx)
             return
 
     if msg == "role" or msg.startswith("role ") or msg == "!role" or msg.startswith("!role "):
