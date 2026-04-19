@@ -800,6 +800,29 @@ async def on_wavelink_track_end(payload):
     await play_next(payload.player)
 
 
+@bot.event
+async def on_voice_state_update(member, before, after):
+    if member.bot:
+        return
+    
+    guild = member.guild
+    vc_role_id = 1494308340619284490
+    vc_role = guild.get_role(vc_role_id)
+    
+    if not vc_role:
+        return
+    
+    try:
+        if before.channel is None and after.channel is not None:
+            await member.add_roles(vc_role, reason="User joined voice channel")
+        elif before.channel is not None and after.channel is None:
+            await member.remove_roles(vc_role, reason="User left voice channel")
+    except discord.Forbidden:
+        print(f"Missing permissions to manage roles for {member}")
+    except discord.HTTPException:
+        print(f"Failed to update role for {member}")
+
+
 @bot.command(name="join")
 async def join_command(ctx):
     player = await get_or_connect_player(ctx)
