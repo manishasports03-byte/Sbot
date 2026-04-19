@@ -680,6 +680,56 @@ class BotInfoView(discord.ui.View):
         self.add_item(discord.ui.Button(label="Vote", url=vote_url))
 
 
+class LunexaView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        
+        categories = [
+            discord.SelectOption(label="Config", emoji="⚙️"),
+            discord.SelectOption(label="Filters", emoji="🎚️"),
+            discord.SelectOption(label="Info", emoji="ℹ️"),
+            discord.SelectOption(label="Music", emoji="🎵"),
+            discord.SelectOption(label="Owner", emoji="👑"),
+            discord.SelectOption(label="Playlist", emoji="📋"),
+            discord.SelectOption(label="Premium", emoji="💎"),
+            discord.SelectOption(label="Purge", emoji="➕"),
+            discord.SelectOption(label="Server", emoji="🖥️"),
+            discord.SelectOption(label="Spotify", emoji="🎧"),
+        ]
+        
+        self.add_item(discord.ui.Select(
+            placeholder="Select Main Category",
+            options=categories,
+            custom_id="lunexa_category"
+        ))
+    
+    async def interaction_check(self, interaction):
+        if interaction.data.get("custom_id") == "lunexa_category":
+            category = interaction.data.get("values")[0]
+            await interaction.response.defer()
+            await interaction.followup.send(f"You selected: **{category}**", ephemeral=True)
+        return True
+
+
+async def send_lunexa_welcome(ctx):
+    embed = discord.Embed(
+        title="Welcome to Lunexa",
+        color=discord.Color.dark_gray()
+    )
+    embed.description = (
+        f"Hey _{ctx.author.mention}_, I'm Lunexa, your Music Companion.\n\n"
+        f"**Default Prefix:** `·`\n"
+        f"**Total Commands:** 119\n"
+        f"Use `.help` to see all commands.\n\n"
+        f"Use the dropdown menu below to explore categories."
+    )
+    
+    if bot.user.display_avatar:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
+    
+    await ctx.send(embed=embed, view=LunexaView())
+
+
 class AFKConfirmView(discord.ui.View):
     def __init__(self, member, reason=None):
         super().__init__(timeout=30)
@@ -972,7 +1022,7 @@ async def on_message(message):
 
         if not cleaned:
             ctx = await bot.get_context(message)
-            await send_bot_info(ctx)
+            await send_lunexa_welcome(ctx)
             return
 
     if msg == "role" or msg.startswith("role ") or msg == "!role" or msg.startswith("!role "):
