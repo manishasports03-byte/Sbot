@@ -712,16 +712,18 @@ class LunexaView(discord.ui.View):
 
 
 async def send_lunexa_welcome(ctx):
+    guild_id = ctx.guild.id if ctx.guild else "DM"
     embed = discord.Embed(
-        title="Welcome to Lunexa",
+        title="poyoyoi Music",
         color=discord.Color.dark_gray()
     )
     embed.description = (
-        f"Hey _{ctx.author.mention}_, I'm Lunexa, your Music Companion.\n\n"
-        f"**Default Prefix:** `·`\n"
-        f"**Total Commands:** 119\n"
-        f"Use `.help` to see all commands.\n\n"
-        f"Use the dropdown menu below to explore categories."
+        "Hey I'm a best quality music bot!\n\n"
+        "**Guild Settings**\n"
+        "Prefix : `none`\n"
+        "Language : Eng\n"
+        f"Server Id : `{guild_id}`\n\n"
+        "Made with ❤ by @_anuneet1x"
     )
     
     if bot.user.display_avatar:
