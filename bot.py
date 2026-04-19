@@ -345,10 +345,15 @@ async def play_command(ctx, *, query=None):
         await ctx.send(f"Queued playlist `{tracks.name}` with {added} tracks.")
     else:
         track = tracks[0]
-        player.queue.put(track)
-        await ctx.send(f"Queued {format_track(track)}.")
 
-    if not player.playing:
+        if player.playing or player.paused:
+            player.queue.put(track)
+            await ctx.send(f"Queued {format_track(track)}.")
+        else:
+            await player.play(track)
+            await ctx.send(f"\U0001f3b6 Playing: {track.title}")
+
+    if isinstance(tracks, wavelink.Playlist) and not player.playing:
         await play_next(player)
         if player.current:
             await ctx.send(f"\U0001f3b6 Playing: {player.current.title}")
