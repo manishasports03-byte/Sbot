@@ -324,7 +324,7 @@ async def play_command(ctx, *, query=None):
         return
 
     try:
-        tracks = await wavelink.Playable.search(query)
+        tracks = await wavelink.Playable.search(f"scsearch:{query}")
     except wavelink.LavalinkLoadException:
         await ctx.send("Lavalink could not load that track.")
         return
