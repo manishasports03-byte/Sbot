@@ -98,6 +98,76 @@ async def remove_afk(member):
     return afk_data
 
 
+def find_role(guild, role_name):
+    role_name = role_name.strip().lower()
+
+    for role in guild.roles:
+        if role.name.lower() == role_name:
+            return role
+
+    return None
+
+
+async def handle_role_toggle(message):
+    if not message.guild:
+        await message.channel.send("Role changes only work inside a server.")
+        return
+
+    if not message.author.guild_permissions.manage_roles:
+        await message.channel.send("You need Manage Roles permission to use this.")
+        return
+
+    if not message.mentions:
+        await message.channel.send("Use it like: `role @user Role Name`")
+        return
+
+    member = message.mentions[0]
+    parts = message.content.split(maxsplit=2)
+
+    if len(parts) < 3:
+        await message.channel.send("Use it like: `role @user Role Name`")
+        return
+
+    role_text = parts[2].strip()
+    role = message.role_mentions[0] if message.role_mentions else find_role(message.guild, role_text)
+
+    if role is None:
+        await message.channel.send(f"I could not find a role named `{role_text}`.")
+        return
+
+    if role == message.guild.default_role:
+        await message.channel.send("I cannot add or remove the everyone role.")
+        return
+
+    if role.managed:
+        await message.channel.send("I cannot manage that role because it is controlled by an integration.")
+        return
+
+    if not message.guild.me.guild_permissions.manage_roles:
+        await message.channel.send("I need Manage Roles permission before I can do that.")
+        return
+
+    if role >= message.guild.me.top_role:
+        await message.channel.send("My role needs to be above that role before I can manage it.")
+        return
+
+    if message.author != message.guild.owner and role >= message.author.top_role:
+        await message.channel.send("You can only manage roles below your highest role.")
+        return
+
+    try:
+        if role in member.roles:
+            await member.remove_roles(role, reason=f"Role toggled by {message.author}")
+            await message.channel.send(f"Removed {role.mention} from {member.mention}.")
+        else:
+            await member.add_roles(role, reason=f"Role toggled by {message.author}")
+            await message.channel.send(f"Added {role.mention} to {member.mention}.")
+    except discord.Forbidden:
+        await message.channel.send("Discord blocked that role change. Check role order and permissions.")
+    except discord.HTTPException:
+        await message.channel.send("Could not change that role right now. Try again later.")
+
+
 class AFKConfirmView(discord.ui.View):
     def __init__(self, member, reason=None):
         super().__init__(timeout=30)
@@ -155,6 +225,10 @@ async def on_message(message):
         return
 
     msg = message.content.lower()
+
+    if msg == "role" or msg.startswith("role ") or msg == "!role" or msg.startswith("!role "):
+        await handle_role_toggle(message)
+        return
 
     if msg == "afk" or msg.startswith("afk "):
         if not message.guild:
