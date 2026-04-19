@@ -219,6 +219,32 @@ def build_now_playing_embed(track):
     return embed
 
 
+def build_queue_embed(player, tracks, page):
+    per_page = 10
+    total_pages = max(1, (len(tracks) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    start = page * per_page
+    page_tracks = tracks[start:start + per_page]
+
+    embed = discord.Embed(title="Now Playing", color=discord.Color.dark_gray())
+
+    if player.current:
+        embed.description = (
+            f"{player.current.title}\n"
+            f"By: {player.current.author}\n\n"
+        )
+    else:
+        embed.description = "Nothing is playing right now.\n\n"
+
+    queue_lines = []
+    for index, track in enumerate(page_tracks, start=start + 1):
+        queue_lines.append(f"`{index}` • {track.title} — {track.author}")
+
+    embed.description += "\n".join(queue_lines) if queue_lines else "The queue is currently empty."
+    embed.set_footer(text=f"Page {page + 1}/{total_pages}")
+    return embed
+
+
 async def send_notice(ctx, message):
     embed = discord.Embed(description=message, color=discord.Color.dark_gray())
     await ctx.send(embed=embed)
@@ -227,6 +253,30 @@ async def send_notice(ctx, message):
 async def send_success(ctx, message):
     embed = discord.Embed(description=f"\u2705 {message}", color=discord.Color.dark_gray())
     await ctx.send(embed=embed)
+
+
+async def send_prefix_card(message):
+    embed = discord.Embed(title=bot.user.display_name, color=discord.Color.dark_gray())
+    embed.description = "My commands work without a prefix. Use `help` to see all commands."
+    await message.channel.send(embed=embed)
+
+
+async def send_bot_info(ctx):
+    guild_id = ctx.guild.id if ctx.guild else "DM"
+    embed = discord.Embed(title=f"{bot.user.display_name} Music", color=discord.Color.dark_gray())
+    embed.description = (
+        "Hey I'm a best quality music bot!\n\n"
+        "**Guild Settings**\n"
+        "Prefix : `none`\n"
+        "Language : Eng\n"
+        f"Server Id : `{guild_id}`\n\n"
+        "Made with \u2764 by @karma.ly"
+    )
+
+    if bot.user.display_avatar:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
+
+    await ctx.send(embed=embed, view=BotInfoView())
 
 
 def is_spotify_url(query):
@@ -562,6 +612,70 @@ class NowPlayingView(discord.ui.View):
         await interaction.response.send_message("Queue shuffled.", ephemeral=True)
 
 
+class QueueView(discord.ui.View):
+    def __init__(self, player, tracks, author_id):
+        super().__init__(timeout=180)
+        self.player = player
+        self.tracks = tracks
+        self.author_id = author_id
+        self.page = 0
+        self.update_buttons()
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "This queue menu is not for you.",
+                ephemeral=True
+            )
+            return False
+
+        return True
+
+    def update_buttons(self):
+        total_pages = max(1, (len(self.tracks) + 9) // 10)
+        self.previous_button.disabled = self.page <= 0
+        self.next_button.disabled = self.page >= total_pages - 1
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
+    async def previous_button(self, interaction, button):
+        self.page -= 1
+        self.update_buttons()
+        await interaction.response.edit_message(
+            embed=build_queue_embed(self.player, self.tracks, self.page),
+            view=self
+        )
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
+    async def next_button(self, interaction, button):
+        self.page += 1
+        self.update_buttons()
+        await interaction.response.edit_message(
+            embed=build_queue_embed(self.player, self.tracks, self.page),
+            view=self
+        )
+
+
+class BotInfoView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+        permissions = discord.Permissions(
+            send_messages=True,
+            embed_links=True,
+            connect=True,
+            speak=True,
+            manage_nicknames=True,
+            manage_roles=True
+        )
+        invite_url = discord.utils.oauth_url(bot.user.id, permissions=permissions)
+        support_url = os.getenv("SUPPORT_URL", "https://discord.com")
+        vote_url = os.getenv("VOTE_URL", "https://discord.com")
+
+        self.add_item(discord.ui.Button(label="Invite", url=invite_url))
+        self.add_item(discord.ui.Button(label="Support", url=support_url))
+        self.add_item(discord.ui.Button(label="Vote", url=vote_url))
+
+
 class AFKConfirmView(discord.ui.View):
     def __init__(self, member, reason=None):
         super().__init__(timeout=30)
@@ -636,6 +750,11 @@ async def join_command(ctx):
 
     if player:
         await send_success(ctx, f"Joined **{player.channel.name}** successfully.")
+
+
+@bot.command(name="about", aliases=["info"])
+async def about_command(ctx):
+    await send_bot_info(ctx)
 
 
 @bot.command(name="play", aliases=["p"])
@@ -796,14 +915,11 @@ async def queue_command(ctx):
         await send_notice(ctx, "The queue is currently empty.")
         return
 
-    tracks = list(player.queue)[:10]
-    lines = [f"{index}. {track.title}" for index, track in enumerate(tracks, start=1)]
-    remaining = len(player.queue) - len(tracks)
-
-    if remaining:
-        lines.append(f"And {remaining} more.")
-
-    await ctx.send("Queue:\n" + "\n".join(lines))
+    tracks = list(player.queue)
+    await ctx.send(
+        embed=build_queue_embed(player, tracks, 0),
+        view=QueueView(player, tracks, ctx.author.id)
+    )
 
 
 @bot.command(name="volume", aliases=["vol"])
@@ -829,6 +945,15 @@ async def on_message(message):
         return
 
     msg = message.content.lower()
+
+    if bot.user in message.mentions and not message.reference:
+        cleaned = message.content.replace(bot.user.mention, "").strip()
+        nickname_mention = f"<@!{bot.user.id}>"
+        cleaned = cleaned.replace(nickname_mention, "").strip()
+
+        if not cleaned:
+            await send_prefix_card(message)
+            return
 
     if msg == "role" or msg.startswith("role ") or msg == "!role" or msg.startswith("!role "):
         await handle_role_toggle(message)
