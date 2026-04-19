@@ -185,6 +185,14 @@ def is_spotify_url(query):
     return "open.spotify.com/" in lowered or lowered.startswith("spotify:")
 
 
+def is_spotify_premium_required_error(error):
+    message = str(error).lower()
+    return (
+        getattr(error, "http_status", None) == 403
+        and "premium subscription required" in message
+    )
+
+
 def get_spotify_client():
     client_id = os.getenv("SPOTIFY_CLIENT_ID")
     client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
@@ -519,8 +527,15 @@ async def play_command(ctx, *, query=None):
         except RuntimeError as exc:
             await ctx.send(f"Spotify link support needs setup: {exc}")
             return
-        except spotipy.SpotifyException:
-            await ctx.send("Spotify could not read that link.")
+        except spotipy.SpotifyException as exc:
+            if is_spotify_premium_required_error(exc):
+                await ctx.send(
+                    "Spotify blocked this playlist/album request because the Spotify app owner "
+                    "needs an active Premium subscription. Add Premium to the Spotify account "
+                    "that owns `SPOTIFY_CLIENT_ID`, or play songs by name instead."
+                )
+            else:
+                await ctx.send("Spotify could not read that link.")
             return
 
         await queue_spotify_tracks(ctx, player, searches, source_type)
