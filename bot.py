@@ -113,8 +113,8 @@ async def handle_role_toggle(message):
         await message.channel.send("Role changes only work inside a server.")
         return
 
-    if not message.author.guild_permissions.manage_roles:
-        await message.channel.send("You need Manage Roles permission to use this.")
+    if not message.author.guild_permissions.administrator:
+        await message.channel.send("Only admins can use this role command.")
         return
 
     if not message.mentions:
