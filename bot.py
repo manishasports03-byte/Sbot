@@ -28,6 +28,7 @@ mention_responses = {
 }
 
 afk_users = {}
+MAX_AFK_PINGS_TO_SHOW = 5
 
 
 def format_duration(started_at):
@@ -51,6 +52,23 @@ def format_duration(started_at):
     return ", ".join(parts[:2])
 
 
+def format_afk_pings(pings):
+    if not pings:
+        return "Nobody pinged you while you were AFK."
+
+    shown_pings = pings[-MAX_AFK_PINGS_TO_SHOW:]
+    lines = ["You were pinged by:"]
+
+    for index, ping in enumerate(shown_pings, start=1):
+        lines.append(f"{index}. {ping['by']} - {ping['url']}")
+
+    hidden_count = len(pings) - len(shown_pings)
+    if hidden_count:
+        lines.append(f"And {hidden_count} older ping{'s' if hidden_count != 1 else ''}.")
+
+    return "\n".join(lines)
+
+
 async def set_afk(member):
     original_nick = member.nick
     display_name = member.display_name
@@ -63,7 +81,8 @@ async def set_afk(member):
     await member.edit(nick=afk_name[:32], reason="User set AFK")
     afk_users[member.id] = {
         "nick": original_nick,
-        "since": datetime.now(timezone.utc)
+        "since": datetime.now(timezone.utc),
+        "pings": []
     }
 
 
@@ -73,7 +92,7 @@ async def remove_afk(member):
 
     afk_data = afk_users.pop(member.id)
     await member.edit(nick=afk_data["nick"], reason="User returned from AFK")
-    return format_duration(afk_data["since"])
+    return afk_data
 
 
 class AFKConfirmView(discord.ui.View):
@@ -145,23 +164,30 @@ async def on_message(message):
         return
 
     if message.guild and message.author.id in afk_users:
-        afk_duration = format_duration(afk_users[message.author.id]["since"])
+        afk_data = afk_users[message.author.id]
+        afk_duration = format_duration(afk_data["since"])
+        ping_summary = format_afk_pings(afk_data["pings"])
 
         try:
-            afk_duration = await remove_afk(message.author)
+            afk_data = await remove_afk(message.author)
+            afk_duration = format_duration(afk_data["since"])
+            ping_summary = format_afk_pings(afk_data["pings"])
             await message.channel.send(
-                f"Welcome back {message.author.mention}, you were AFK for {afk_duration}."
+                f"Welcome back {message.author.mention}, you were AFK for {afk_duration}.\n"
+                f"{ping_summary}"
             )
         except discord.Forbidden:
             afk_users.pop(message.author.id, None)
             await message.channel.send(
                 f"Welcome back {message.author.mention}, you were AFK for {afk_duration}. "
-                "I could not restore your nickname."
+                "I could not restore your nickname.\n"
+                f"{ping_summary}"
             )
         except discord.HTTPException:
             await message.channel.send(
                 f"Welcome back {message.author.mention}, you were AFK for {afk_duration}. "
-                "I could not restore your nickname right now."
+                "I could not restore your nickname right now.\n"
+                f"{ping_summary}"
             )
 
     for word in bad_words:
@@ -177,7 +203,13 @@ async def on_message(message):
 
     for mentioned_user in message.mentions:
         if mentioned_user.id in afk_users:
-            afk_duration = format_duration(afk_users[mentioned_user.id]["since"])
+            afk_data = afk_users[mentioned_user.id]
+            afk_duration = format_duration(afk_data["since"])
+            afk_data["pings"].append({
+                "by": message.author.display_name,
+                "url": message.jump_url,
+                "time": datetime.now(timezone.utc)
+            })
             await message.channel.send(
                 f"{mentioned_user.mention} is AFK right now. AFK for {afk_duration}."
             )
