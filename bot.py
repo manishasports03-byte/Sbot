@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from datetime import datetime, timezone
 import random
 import os
 from dotenv import load_dotenv
@@ -29,6 +30,27 @@ mention_responses = {
 afk_users = {}
 
 
+def format_duration(started_at):
+    total_seconds = int((datetime.now(timezone.utc) - started_at).total_seconds())
+    total_seconds = max(total_seconds, 0)
+
+    days, remainder = divmod(total_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    parts = []
+    if days:
+        parts.append(f"{days} day{'s' if days != 1 else ''}")
+    if hours:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if minutes:
+        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+    if seconds or not parts:
+        parts.append(f"{seconds} second{'s' if seconds != 1 else ''}")
+
+    return ", ".join(parts[:2])
+
+
 async def set_afk(member):
     original_nick = member.nick
     display_name = member.display_name
@@ -38,17 +60,20 @@ async def set_afk(member):
     else:
         afk_name = f"[AFK] {display_name}"
 
-    afk_users[member.id] = original_nick
     await member.edit(nick=afk_name[:32], reason="User set AFK")
+    afk_users[member.id] = {
+        "nick": original_nick,
+        "since": datetime.now(timezone.utc)
+    }
 
 
 async def remove_afk(member):
     if member.id not in afk_users:
-        return False
+        return None
 
-    original_nick = afk_users.pop(member.id)
-    await member.edit(nick=original_nick, reason="User returned from AFK")
-    return True
+    afk_data = afk_users.pop(member.id)
+    await member.edit(nick=afk_data["nick"], reason="User returned from AFK")
+    return format_duration(afk_data["since"])
 
 
 class AFKConfirmView(discord.ui.View):
@@ -120,17 +145,23 @@ async def on_message(message):
         return
 
     if message.guild and message.author.id in afk_users:
+        afk_duration = format_duration(afk_users[message.author.id]["since"])
+
         try:
-            await remove_afk(message.author)
-            await message.channel.send(f"Welcome back {message.author.mention}, AFK removed.")
+            afk_duration = await remove_afk(message.author)
+            await message.channel.send(
+                f"Welcome back {message.author.mention}, you were AFK for {afk_duration}."
+            )
         except discord.Forbidden:
             afk_users.pop(message.author.id, None)
             await message.channel.send(
-                f"Welcome back {message.author.mention}. I could not restore your nickname."
+                f"Welcome back {message.author.mention}, you were AFK for {afk_duration}. "
+                "I could not restore your nickname."
             )
         except discord.HTTPException:
             await message.channel.send(
-                f"Welcome back {message.author.mention}. I could not restore your nickname right now."
+                f"Welcome back {message.author.mention}, you were AFK for {afk_duration}. "
+                "I could not restore your nickname right now."
             )
 
     for word in bad_words:
@@ -146,7 +177,10 @@ async def on_message(message):
 
     for mentioned_user in message.mentions:
         if mentioned_user.id in afk_users:
-            await message.channel.send(f"{mentioned_user.mention} is AFK right now.")
+            afk_duration = format_duration(afk_users[mentioned_user.id]["since"])
+            await message.channel.send(
+                f"{mentioned_user.mention} is AFK right now. AFK for {afk_duration}."
+            )
             continue
 
         if mentioned_user.id in mention_responses:
