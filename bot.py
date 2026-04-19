@@ -245,6 +245,16 @@ def build_queue_embed(player, tracks, page):
     return embed
 
 
+def build_music_action_embed(message, hint=None):
+    embed = discord.Embed(color=discord.Color.dark_gray())
+    embed.description = f"\u2705 {message}"
+
+    if hint:
+        embed.description += f"\n\n{hint}"
+
+    return embed
+
+
 async def send_notice(ctx, message):
     embed = discord.Embed(description=message, color=discord.Color.dark_gray())
     await ctx.send(embed=embed)
@@ -840,7 +850,12 @@ async def pause_command(ctx):
         return
 
     await player.pause(True)
-    await ctx.send("Paused.")
+    await ctx.send(
+        embed=build_music_action_embed(
+            "Music has been successfully paused.",
+            "Use `resume` to play it again."
+        )
+    )
 
 
 @bot.command(name="resume")
@@ -852,7 +867,12 @@ async def resume_command(ctx):
         return
 
     await player.pause(False)
-    await ctx.send("Resumed.")
+    await ctx.send(
+        embed=build_music_action_embed(
+            "Music playback has been resumed.",
+            "Enjoy your music!"
+        )
+    )
 
 
 @bot.command(name="skip", aliases=["s"])
@@ -864,7 +884,12 @@ async def skip_command(ctx):
         return
 
     await player.skip(force=True)
-    await ctx.send("Skipped.")
+    await ctx.send(
+        embed=build_music_action_embed(
+            "Skipped the current song.",
+            "Playing the next track."
+        )
+    )
 
 
 @bot.command(name="stop")
@@ -889,7 +914,7 @@ async def leave_command(ctx):
         return
 
     await player.disconnect()
-    await ctx.send("Left the voice channel.")
+    await ctx.send(embed=build_music_action_embed("Bot has been disconnected from the voice channel."))
 
 
 @bot.command(name="nowplaying", aliases=["np"])
