@@ -22,11 +22,6 @@ responses = [
     "admin bulaun kya \U0001f440"
 ]
 
-mention_responses = {
-    1476689941252800676: "so rhi hu",
-    760729575789166652: "lmao ded \U0001f938\u200d\u2642\ufe0f"
-}
-
 afk_users = {}
 MAX_AFK_PINGS_TO_SHOW = 5
 
@@ -214,10 +209,6 @@ async def on_message(message):
                 f"{mentioned_user.mention} is AFK right now. AFK for {afk_duration}."
             )
             continue
-
-        if mentioned_user.id in mention_responses:
-            await message.channel.send(mention_responses[mentioned_user.id])
-            break
 
     await bot.process_commands(message)
 
