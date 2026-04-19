@@ -183,11 +183,17 @@ async def connect_lavalink():
     if lavalink_connected:
         return
 
-    uri = os.getenv("LAVALINK_URI", "http://localhost:2333")
-    password = os.getenv("LAVALINK_PASSWORD", "youshallnotpass")
-    identifier = os.getenv("LAVALINK_IDENTIFIER", "main")
+    uri = os.getenv("LAVALINK_URI")
+    password = os.getenv("LAVALINK_PASSWORD")
 
-    node = wavelink.Node(identifier=identifier, uri=uri, password=password)
+    if not uri or not password:
+        raise RuntimeError("LAVALINK_URI and LAVALINK_PASSWORD must be set.")
+
+    node = wavelink.Node(
+        identifier="main",
+        uri=f"wss://{uri}",
+        password=password
+    )
     await wavelink.Pool.connect(nodes=[node], client=bot)
     lavalink_connected = True
 
