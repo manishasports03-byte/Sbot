@@ -185,8 +185,8 @@ async def connect_lavalink():
 
     node = wavelink.Node(
         identifier="main",
-        uri="ws://lava.link:80",
-        password="anything"
+        uri="wss://lavalink-4-production-d73d.up.railway.app",
+        password="youshallnotpass"
     )
     await wavelink.Pool.connect(nodes=[node], client=bot)
     lavalink_connected = True
