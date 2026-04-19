@@ -177,6 +177,68 @@ def format_track(track):
     return track.title
 
 
+def build_music_search_query(query):
+    lowered = query.lower()
+    search_prefixes = ("scsearch:", "ytsearch:", "ytmsearch:", "amsearch:", "spsearch:")
+
+    if lowered.startswith(search_prefixes) or lowered.startswith(("http://", "https://")):
+        return query
+
+    return f"ytmsearch:{query}"
+
+
+def official_track_score(track):
+    title = track.title.lower()
+    author = (track.author or "").lower()
+    combined = f"{title} {author}"
+    score = 0
+
+    official_signals = (
+        "official",
+        "provided to youtube",
+        "topic",
+        "vevo",
+        "records",
+        "music",
+        "audio"
+    )
+    bad_signals = (
+        "cover",
+        "remix",
+        "slowed",
+        "reverb",
+        "nightcore",
+        "karaoke",
+        "instrumental",
+        "lyrics",
+        "lyric",
+        "live",
+        "sped up",
+        "8d",
+        "lofi"
+    )
+
+    for signal in official_signals:
+        if signal in combined:
+            score += 4
+
+    for signal in bad_signals:
+        if signal in combined:
+            score -= 5
+
+    if "official music video" in title or "official audio" in title:
+        score += 8
+
+    if "topic" in author:
+        score += 6
+
+    return score
+
+
+def pick_best_track(tracks):
+    return max(tracks, key=official_track_score)
+
+
 async def connect_lavalink():
     global lavalink_connected
 
@@ -323,7 +385,7 @@ async def play_command(ctx, *, query=None):
     if not player:
         return
 
-    search_query = query if query.lower().startswith("scsearch:") else f"scsearch:{query}"
+    search_query = build_music_search_query(query)
 
     try:
         tracks = await wavelink.Playable.search(search_query)
@@ -344,7 +406,13 @@ async def play_command(ctx, *, query=None):
         added = player.queue.put(tracks)
         await ctx.send(f"Queued playlist `{tracks.name}` with {added} tracks.")
     else:
-        track = tracks[0]
+        for index, found_track in enumerate(tracks[:5], start=1):
+            print(
+                f"Result {index}: {found_track.title} - {found_track.author} "
+                f"(score {official_track_score(found_track)})"
+            )
+
+        track = pick_best_track(tracks)
 
         if player.playing or player.paused:
             player.queue.put(track)
