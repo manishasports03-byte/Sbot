@@ -1,2 +1,4 @@
 discord.py
 python-dotenv
+wavelink
+aiohttp>=3.9.5

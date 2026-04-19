@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from datetime import datetime, timezone
+import wavelink
 import random
 import os
 from dotenv import load_dotenv
@@ -24,6 +25,7 @@ responses = [
 
 afk_users = {}
 MAX_AFK_PINGS_TO_SHOW = 5
+lavalink_connected = False
 
 
 def format_duration(started_at):
@@ -168,6 +170,79 @@ async def handle_role_toggle(message):
         await message.channel.send("Could not change that role right now. Try again later.")
 
 
+def format_track(track):
+    if track.uri:
+        return f"[{track.title}]({track.uri})"
+
+    return track.title
+
+
+async def connect_lavalink():
+    global lavalink_connected
+
+    if lavalink_connected:
+        return
+
+    uri = os.getenv("LAVALINK_URI", "http://localhost:2333")
+    password = os.getenv("LAVALINK_PASSWORD", "youshallnotpass")
+    identifier = os.getenv("LAVALINK_IDENTIFIER", "main")
+
+    node = wavelink.Node(identifier=identifier, uri=uri, password=password)
+    await wavelink.Pool.connect(nodes=[node], client=bot)
+    lavalink_connected = True
+
+
+def get_player(ctx):
+    player = ctx.voice_client
+
+    if not player:
+        return None
+
+    if not isinstance(player, wavelink.Player):
+        return None
+
+    return player
+
+
+async def get_or_connect_player(ctx):
+    if not ctx.author.voice or not ctx.author.voice.channel:
+        await ctx.send("Join a voice channel first.")
+        return None
+
+    player = get_player(ctx)
+    channel = ctx.author.voice.channel
+
+    if player:
+        if player.channel != channel:
+            await player.move_to(channel)
+        return player
+
+    try:
+        return await channel.connect(cls=wavelink.Player, self_deaf=True)
+    except wavelink.InvalidNodeException:
+        await ctx.send("Lavalink is not connected yet. Check Railway logs and Lavalink env vars.")
+    except discord.ClientException:
+        await ctx.send("I am already connected to a voice channel.")
+    except discord.Forbidden:
+        await ctx.send("I need permission to join/speak in your voice channel.")
+    except discord.HTTPException:
+        await ctx.send("Could not join the voice channel right now.")
+
+    return None
+
+
+async def play_next(player):
+    if not player or player.queue.is_empty:
+        return
+
+    try:
+        next_track = player.queue.get()
+    except wavelink.QueueEmpty:
+        return
+
+    await player.play(next_track)
+
+
 class AFKConfirmView(discord.ui.View):
     def __init__(self, member, reason=None):
         super().__init__(timeout=30)
@@ -216,7 +291,172 @@ class AFKConfirmView(discord.ui.View):
 
 @bot.event
 async def on_ready():
+    try:
+        await connect_lavalink()
+        print("Lavalink node connected.")
+    except Exception as exc:
+        print(f"Lavalink connection failed: {exc}")
+
     print(f"\u2705 Bot is online as {bot.user}")
+
+
+@bot.event
+async def on_wavelink_track_end(payload):
+    await play_next(payload.player)
+
+
+@bot.command(name="join")
+async def join_command(ctx):
+    player = await get_or_connect_player(ctx)
+
+    if player:
+        await ctx.send(f"Joined {player.channel.mention}.")
+
+
+@bot.command(name="play", aliases=["p"])
+async def play_command(ctx, *, query=None):
+    if not query:
+        await ctx.send("Use it like: `!play song name or link`")
+        return
+
+    player = await get_or_connect_player(ctx)
+    if not player:
+        return
+
+    try:
+        tracks = await wavelink.Playable.search(query)
+    except wavelink.LavalinkLoadException:
+        await ctx.send("Lavalink could not load that track.")
+        return
+    except wavelink.InvalidNodeException:
+        await ctx.send("Lavalink is not connected yet.")
+        return
+
+    if not tracks:
+        await ctx.send("No tracks found.")
+        return
+
+    if isinstance(tracks, wavelink.Playlist):
+        added = player.queue.put(tracks)
+        await ctx.send(f"Queued playlist `{tracks.name}` with {added} tracks.")
+    else:
+        track = tracks[0]
+        player.queue.put(track)
+        await ctx.send(f"Queued {format_track(track)}.")
+
+    if not player.playing:
+        await play_next(player)
+
+
+@bot.command(name="pause")
+async def pause_command(ctx):
+    player = get_player(ctx)
+
+    if not player or not player.playing:
+        await ctx.send("Nothing is playing right now.")
+        return
+
+    await player.pause(True)
+    await ctx.send("Paused.")
+
+
+@bot.command(name="resume")
+async def resume_command(ctx):
+    player = get_player(ctx)
+
+    if not player:
+        await ctx.send("Nothing is playing right now.")
+        return
+
+    await player.pause(False)
+    await ctx.send("Resumed.")
+
+
+@bot.command(name="skip", aliases=["s"])
+async def skip_command(ctx):
+    player = get_player(ctx)
+
+    if not player or not player.playing:
+        await ctx.send("Nothing is playing right now.")
+        return
+
+    await player.skip(force=True)
+    await ctx.send("Skipped.")
+
+
+@bot.command(name="stop")
+async def stop_command(ctx):
+    player = get_player(ctx)
+
+    if not player:
+        await ctx.send("I am not playing anything.")
+        return
+
+    player.queue.clear()
+    await player.stop()
+    await ctx.send("Stopped and cleared the queue.")
+
+
+@bot.command(name="leave", aliases=["disconnect", "dc"])
+async def leave_command(ctx):
+    player = get_player(ctx)
+
+    if not player:
+        await ctx.send("I am not connected to voice.")
+        return
+
+    await player.disconnect()
+    await ctx.send("Left the voice channel.")
+
+
+@bot.command(name="nowplaying", aliases=["np"])
+async def nowplaying_command(ctx):
+    player = get_player(ctx)
+
+    if not player or not player.current:
+        await ctx.send("Nothing is playing right now.")
+        return
+
+    await ctx.send(f"Now playing: {format_track(player.current)}")
+
+
+@bot.command(name="queue", aliases=["q"])
+async def queue_command(ctx):
+    player = get_player(ctx)
+
+    if not player:
+        await ctx.send("I am not playing anything.")
+        return
+
+    if player.queue.is_empty:
+        await ctx.send("Queue is empty.")
+        return
+
+    tracks = list(player.queue)[:10]
+    lines = [f"{index}. {track.title}" for index, track in enumerate(tracks, start=1)]
+    remaining = len(player.queue) - len(tracks)
+
+    if remaining:
+        lines.append(f"And {remaining} more.")
+
+    await ctx.send("Queue:\n" + "\n".join(lines))
+
+
+@bot.command(name="volume", aliases=["vol"])
+async def volume_command(ctx, volume: int = None):
+    player = get_player(ctx)
+
+    if not player:
+        await ctx.send("I am not connected to voice.")
+        return
+
+    if volume is None:
+        await ctx.send(f"Current volume: {player.volume}%")
+        return
+
+    volume = max(0, min(volume, 100))
+    await player.set_volume(volume)
+    await ctx.send(f"Volume set to {volume}%.")
 
 
 @bot.event
