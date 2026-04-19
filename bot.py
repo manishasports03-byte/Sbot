@@ -165,10 +165,16 @@ async def handle_role_toggle(message):
     try:
         if role in member.roles:
             await member.remove_roles(role, reason=f"Role toggled by {message.author}")
-            await message.channel.send(f"Removed {role.mention} from {member.mention}.")
+            await message.channel.send(
+                f"Removed **{role.name}** from **{member.display_name}**.",
+                allowed_mentions=discord.AllowedMentions(roles=False, users=False)
+            )
         else:
             await member.add_roles(role, reason=f"Role toggled by {message.author}")
-            await message.channel.send(f"Added {role.mention} to {member.mention}.")
+            await message.channel.send(
+                f"Added **{role.name}** to **{member.display_name}**.",
+                allowed_mentions=discord.AllowedMentions(roles=False, users=False)
+            )
     except discord.Forbidden:
         await message.channel.send("Discord blocked that role change. Check role order and permissions.")
     except discord.HTTPException:
