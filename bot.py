@@ -11,7 +11,7 @@ load_dotenv()
 intents = discord.Intents.default()
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix=["!", ""], intents=intents)
 
 bad_words = ["mc", "bc", "madarchod", "bhosdike", "chutiya", "idiot", "stupid"]
 
@@ -316,7 +316,7 @@ async def join_command(ctx):
 @bot.command(name="play", aliases=["p"])
 async def play_command(ctx, *, query=None):
     if not query:
-        await ctx.send("Use it like: `!play song name or link`")
+        await ctx.send("Use it like: `play song name or link`")
         return
 
     player = await get_or_connect_player(ctx)
