@@ -185,6 +185,11 @@ async def send_notice(ctx, message):
     await ctx.send(embed=embed)
 
 
+async def send_success(ctx, message):
+    embed = discord.Embed(description=f"\u2705 {message}", color=discord.Color.dark_gray())
+    await ctx.send(embed=embed)
+
+
 def is_spotify_url(query):
     lowered = query.lower()
     return "open.spotify.com/" in lowered or lowered.startswith("spotify:")
@@ -513,7 +518,7 @@ async def join_command(ctx):
     player = await get_or_connect_player(ctx)
 
     if player:
-        await ctx.send(f"Joined {player.channel.mention}.")
+        await send_success(ctx, f"Joined **{player.channel.name}** successfully.")
 
 
 @bot.command(name="play", aliases=["p"])
