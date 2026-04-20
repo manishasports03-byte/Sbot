@@ -6,6 +6,7 @@ import spotipy
 import wavelink
 import random
 import os
+import asyncio
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -863,6 +864,9 @@ async def play_command(ctx, *, query=None):
     if not player:
         return
 
+    # 🔥 Step 1 — Set volume to 100
+    await player.set_volume(100)
+
     if is_spotify_url(query):
         try:
             source_type, searches = await resolve_spotify_url_async(query)
@@ -921,6 +925,13 @@ async def play_command(ctx, *, query=None):
             player.queue.put(track)
             await ctx.send(embed=build_track_queued_embed(track))
         else:
+            # 🔥 Step 2 — Force reconnect (stop if already playing)
+            if player.playing:
+                await player.stop()
+            
+            # 🔥 Step 3 — Add small delay (CRITICAL)
+            await asyncio.sleep(1)
+            
             await player.play(track)
             
             # 🔥 NOW PLAYING UI - Send embed reliably
