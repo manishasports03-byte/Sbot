@@ -88,7 +88,10 @@ async def set_afk(member, reason=None):
     else:
         afk_name = f"[AFK] {display_name}"
 
-    await member.edit(nick=afk_name[:32], reason="User set AFK")
+    # Bot cannot change the guild owner's nickname due to Discord restrictions
+    if member.id != member.guild.owner_id:
+        await member.edit(nick=afk_name[:32], reason="User set AFK")
+    
     afk_users[member.id] = {
         "nick": original_nick,
         "since": datetime.now(timezone.utc),
@@ -102,7 +105,11 @@ async def remove_afk(member):
         return None
 
     afk_data = afk_users.pop(member.id)
-    await member.edit(nick=afk_data["nick"], reason="User returned from AFK")
+    
+    # Bot cannot change the guild owner's nickname due to Discord restrictions
+    if member.id != member.guild.owner_id:
+        await member.edit(nick=afk_data["nick"], reason="User returned from AFK")
+    
     return afk_data
 
 
@@ -766,6 +773,14 @@ class AFKConfirmView(discord.ui.View):
 
     @discord.ui.button(label="Yes", style=discord.ButtonStyle.success)
     async def confirm_afk(self, interaction, button):
+        # Check if the member is the guild owner
+        if self.member.id == self.member.guild.owner_id:
+            await interaction.response.edit_message(
+                content=f"{self.member.mention} you are the server owner, you can't set AFK!",
+                view=None
+            )
+            return
+
         try:
             await set_afk(self.member, self.reason)
         except discord.Forbidden:
