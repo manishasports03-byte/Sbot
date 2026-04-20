@@ -499,6 +499,9 @@ async def play_next(player):
 
 
 async def search_best_track(query):
+    # 🔥 REMOVE DOUBLE PREFIX - Clean query first
+    query = query.replace("ytsearch:", "").replace("ytmsearch:", "").replace("scsearch:", "")
+
     # 🔥 Use YouTube search with official audio filter
     tracks = await wavelink.Playable.search(f"ytsearch:{query} official audio")
 
@@ -881,6 +884,9 @@ async def play_command(ctx, *, query=None):
 
         await queue_spotify_tracks(ctx, player, searches, source_type)
         return
+
+    # 🔥 REMOVE DOUBLE PREFIX - Clean query first
+    query = query.replace("ytsearch:", "").replace("ytmsearch:", "").replace("scsearch:", "")
 
     # 🔥 Use YouTube search with official audio filter
     try:
