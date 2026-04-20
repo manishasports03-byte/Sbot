@@ -378,13 +378,14 @@ async def resolve_spotify_url_async(query):
 
 
 def build_music_search_query(query):
+    query = query.strip()
     lowered = query.lower()
     search_prefixes = ("scsearch:", "ytsearch:", "ytmsearch:", "amsearch:", "spsearch:")
 
     if lowered.startswith(search_prefixes) or lowered.startswith(("http://", "https://")):
         return query
 
-    return f"ytmsearch:{query}"
+    return f"ytsearch:{query}"
 
 
 def official_track_score(track):
@@ -506,13 +507,18 @@ async def play_next(player):
 
 async def search_best_track(query):
     # 🔥 REMOVE DOUBLE PREFIX - Clean query first
-    query = query.replace("ytsearch:", "").replace("ytmsearch:", "").replace("scsearch:", "")
+    query = query.strip()
+
+    if not query.startswith(("ytsearch:", "ytmsearch:", "scsearch:", "http")):
+        search_query = f"ytsearch:{query}"
+    else:
+        search_query = query
 
     # 🔥 Try YouTube Music first
-    tracks = await wavelink.Playable.search(f"ytmsearch:{query}")
+    tracks = await wavelink.Playable.search(search_query)
 
     # 🔥 Fallback to SoundCloud if YT fails
-    if not tracks or len(tracks) == 0:
+    if not tracks:
         print("YT failed, trying SoundCloud...")
         tracks = await wavelink.Playable.search(f"scsearch:{query}")
 
@@ -906,11 +912,16 @@ async def play_command(ctx, *, query=None):
         return
 
     # 🔥 REMOVE DOUBLE PREFIX - Clean query first
-    query = query.replace("ytsearch:", "").replace("ytmsearch:", "").replace("scsearch:", "")
+    query = query.strip()
+
+    if not query.startswith(("ytsearch:", "ytmsearch:", "scsearch:", "http")):
+        search_query = f"ytsearch:{query}"
+    else:
+        search_query = query
 
     # 🔥 Try YouTube Music first
     try:
-        all_tracks = await wavelink.Playable.search(f"ytmsearch:{query}")
+        all_tracks = await wavelink.Playable.search(search_query)
     except wavelink.LavalinkLoadException:
         await ctx.send("Lavalink could not load that track.")
         return
@@ -919,7 +930,7 @@ async def play_command(ctx, *, query=None):
         return
 
     # 🔥 Fallback to SoundCloud if YT fails
-    if not all_tracks or len(all_tracks) == 0:
+    if not all_tracks:
         print("YT failed, trying SoundCloud...")
         try:
             all_tracks = await wavelink.Playable.search(f"scsearch:{query}")
