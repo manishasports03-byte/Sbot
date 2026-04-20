@@ -14,8 +14,9 @@ load_dotenv()
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.voice_states = True
 
-bot = commands.Bot(command_prefix=["!", ""], intents=intents, case_insensitive=True)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 bad_words = ["mc", "bc", "madarchod", "bhosdike", "chutiya", "idiot", "stupid"]
 
@@ -207,33 +208,18 @@ async def refresh_track(track):
 
 
 async def connect_music_voice(ctx):
-    if not ctx.author.voice or not ctx.author.voice.channel:
-        await ctx.send("Join VC first")
+    if ctx.author.voice is None:
+        await ctx.send("Join a VC first.")
         return None
 
-    voice_channel = ctx.author.voice.channel
-    voice_client = ctx.voice_client
+    channel = ctx.author.voice.channel
 
-    if voice_client and voice_client.channel != voice_channel:
-        await voice_client.move_to(voice_channel)
-        return voice_client
+    if ctx.voice_client:
+        if ctx.voice_client.channel != channel:
+            await ctx.voice_client.move_to(channel)
+        return ctx.voice_client
 
-    if voice_client:
-        return voice_client
-
-    try:
-        return await voice_channel.connect(self_deaf=True)
-    except discord.ClientException:
-        voice_client = ctx.voice_client
-        if voice_client and voice_client.channel != voice_channel:
-            await voice_client.move_to(voice_channel)
-        return voice_client
-    except discord.Forbidden:
-        await ctx.send("I need permission to join and speak in that voice channel.")
-    except discord.HTTPException:
-        await ctx.send("Could not join the voice channel right now.")
-
-    return None
+    return await channel.connect(reconnect=True)
 
 
 def schedule_music_advance(guild_id, error):
