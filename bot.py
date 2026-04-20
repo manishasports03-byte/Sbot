@@ -7,6 +7,7 @@ import wavelink
 import random
 import os
 import asyncio
+import yt_dlp
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -375,6 +376,27 @@ def resolve_spotify_url(query):
 
 async def resolve_spotify_url_async(query):
     return await bot.loop.run_in_executor(None, resolve_spotify_url, query)
+
+
+def _extract_stream_url(query):
+    ydl_opts = {
+        "format": "bestaudio",
+        "noplaylist": True,
+        "quiet": True
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(f"ytsearch:{query}", download=False)
+        entries = info.get("entries") or []
+
+        if not entries:
+            return None
+
+        return entries[0].get("url")
+
+
+async def get_stream_url(query):
+    return await asyncio.to_thread(_extract_stream_url, query)
 
 
 def build_music_search_query(query):
@@ -884,111 +906,47 @@ async def play_command(ctx, *, query=None):
         await ctx.send("Use it like: `play song name or link`")
         return
 
-    player = await get_or_connect_player(ctx)
-    if not player:
+    if not ctx.author.voice or not ctx.author.voice.channel:
+        await ctx.send("Join VC first")
         return
 
-    # 🔥 Step 1 — Set volume to 100
-    await player.set_volume(100)
+    voice_channel = ctx.author.voice.channel
+    vc = ctx.voice_client
 
-    if is_spotify_url(query):
+    if vc and vc.channel != voice_channel:
+        await vc.move_to(voice_channel)
+    elif not vc:
         try:
-            source_type, searches = await resolve_spotify_url_async(query)
-        except RuntimeError as exc:
-            await ctx.send(f"Spotify link support needs setup: {exc}")
+            vc = await voice_channel.connect()
+        except discord.ClientException:
+            vc = ctx.voice_client
+        except discord.Forbidden:
+            await ctx.send("I need permission to join and speak in that voice channel.")
             return
-        except spotipy.SpotifyException as exc:
-            if is_spotify_premium_required_error(exc):
-                await ctx.send(
-                    "Spotify blocked this playlist/album request because the Spotify app owner "
-                    "needs an active Premium subscription. Add Premium to the Spotify account "
-                    "that owns `SPOTIFY_CLIENT_ID`, or play songs by name instead."
-                )
-            else:
-                await ctx.send("Spotify could not read that link.")
+        except discord.HTTPException:
+            await ctx.send("Could not join the voice channel right now.")
             return
 
-        await queue_spotify_tracks(ctx, player, searches, source_type)
-        return
-
-    # 🔥 REMOVE DOUBLE PREFIX - Clean query first
-    query = query.strip()
-
-    if not query.startswith(("ytsearch:", "ytmsearch:", "scsearch:", "http")):
-        search_query = f"ytsearch:{query}"
-    else:
-        search_query = query
-
-    # 🔥 Try YouTube Music first
     try:
-        all_tracks = await wavelink.Playable.search(search_query)
-    except wavelink.LavalinkLoadException:
-        await ctx.send("Lavalink could not load that track.")
-        return
-    except wavelink.InvalidNodeException:
-        await ctx.send("Lavalink is not connected yet.")
+        stream_url = await get_stream_url(query)
+    except Exception:
+        await ctx.send("Could not fetch a playable stream for that search.")
         return
 
-    # 🔥 Fallback to SoundCloud if YT fails
-    if not all_tracks:
-        print("YT failed, trying SoundCloud...")
-        try:
-            all_tracks = await wavelink.Playable.search(f"scsearch:{query}")
-        except wavelink.LavalinkLoadException:
-            await ctx.send("Lavalink could not load that track.")
-            return
-        except wavelink.InvalidNodeException:
-            await ctx.send("Lavalink is not connected yet.")
-            return
-
-    print(f"Tracks found: {len(all_tracks)}")
-
-    if not all_tracks:
-        await ctx.send("❌ No songs found")
+    if not stream_url:
+        await ctx.send("No songs found.")
         return
 
-    if isinstance(all_tracks, wavelink.Playlist):
-        added = player.queue.put(all_tracks)
-        await ctx.send(f"Queued playlist `{all_tracks.name}` with {added} tracks.")
-    else:
-        for index, found_track in enumerate(all_tracks[:5], start=1):
-            print(
-                f"Result {index}: {found_track.title} - {found_track.author} "
-                f"(score {official_track_score(found_track)})"
-            )
+    if vc.is_playing():
+        vc.stop()
 
-        track = pick_best_track(all_tracks)
-        set_track_requester(ctx, track)
+    try:
+        vc.play(discord.FFmpegPCMAudio(stream_url))
+    except Exception:
+        await ctx.send("FFmpeg could not start playback for that track.")
+        return
 
-        if player.playing or player.paused:
-            player.queue.put(track)
-            await ctx.send(embed=build_track_queued_embed(track))
-        else:
-            # 🔥 Step 2 — Force reconnect (stop if already playing)
-            if player.playing:
-                await player.stop()
-            
-            # 🔥 Step 3 — Add small delay (CRITICAL)
-            await asyncio.sleep(1)
-            
-            await player.play(track)
-            
-            # 🔥 NOW PLAYING UI - Send embed reliably
-            embed = discord.Embed(
-                title="🎶 Now Playing",
-                description=f"**{track.title}**",
-                color=discord.Color.blue()
-            )
-            embed.add_field(name="Artist", value=track.author, inline=True)
-            embed.add_field(name="Duration", value=f"{track.length//1000}s", inline=True)
-            embed.set_footer(text=f"Requested by {ctx.author}")
-            
-            await ctx.send(embed=embed, view=NowPlayingView())
-
-    if isinstance(all_tracks, wavelink.Playlist) and not player.playing:
-        await play_next(player)
-        if player.current:
-            await ctx.send(embed=build_now_playing_embed(player.current), view=NowPlayingView())
+    await ctx.send(f"Now playing: `{query}`")
 
 
 @bot.command(name="pause")
