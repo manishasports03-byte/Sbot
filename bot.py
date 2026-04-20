@@ -440,7 +440,7 @@ async def connect_lavalink():
 
     node = wavelink.Node(
         identifier="main",
-        uri="wss://lavalinkv4-idle.alfari.id",
+        uri="wss://eu.lavalink.dev",
         password="youshallnotpass"
     )
     await wavelink.Pool.connect(nodes=[node], client=bot)
