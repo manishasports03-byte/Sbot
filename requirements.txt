@@ -1,5 +1,6 @@
 discord.py
-python-dotenv
-aiohttp>=3.9.5
-spotipy
 yt-dlp
+PyNaCl
+ffmpeg
+python-dotenv
+spotipy
