@@ -499,17 +499,17 @@ async def play_next(player):
 
 
 async def search_best_track(query):
-    # improve search quality with "official audio"
-    if not query.startswith("scsearch:"):
-        search_query = f"scsearch:{query} official audio"
-    else:
-        search_query = query
-    
-    tracks = await wavelink.Playable.search(search_query)
+    # 🔥 FORCE ONLY SOUND CLOUD (STRICT MODE)
+    all_tracks = await wavelink.Playable.search(
+        f"scsearch:{query} official audio"
+    )
 
-    print(f"Tracks found: {len(tracks)}")
+    # 🔥 STRICT FILTER - Only SoundCloud tracks
+    tracks = [t for t in all_tracks if "soundcloud" in str(t.uri).lower()]
 
-    if not tracks or isinstance(tracks, wavelink.Playlist):
+    print(f"Tracks found after filter: {len(tracks)}")
+
+    if not tracks or isinstance(all_tracks, wavelink.Playlist):
         return None
 
     for index, found_track in enumerate(tracks[:5], start=1):
@@ -517,8 +517,9 @@ async def search_best_track(query):
             f"Result {index}: {found_track.title} - {found_track.author} "
             f"(score {official_track_score(found_track)})"
         )
+        print("TRACK URI:", found_track.uri)
 
-    return pick_best_track(tracks)
+    return tracks[0]
 
 
 async def queue_spotify_tracks(ctx, player, searches, source_type):
@@ -887,14 +888,11 @@ async def play_command(ctx, *, query=None):
         await queue_spotify_tracks(ctx, player, searches, source_type)
         return
 
-    # improve search quality with "official audio"
-    if not query.startswith("scsearch:"):
-        search_query = f"scsearch:{query} official audio"
-    else:
-        search_query = query
-
+    # 🔥 Step 1 — FORCE ONLY SOUND CLOUD (STRICT MODE)
     try:
-        tracks = await wavelink.Playable.search(search_query)
+        all_tracks = await wavelink.Playable.search(
+            f"scsearch:{query} official audio"
+        )
     except wavelink.LavalinkLoadException:
         await ctx.send("Lavalink could not load that track.")
         return
@@ -902,15 +900,18 @@ async def play_command(ctx, *, query=None):
         await ctx.send("Lavalink is not connected yet.")
         return
 
-    print(f"Tracks found: {len(tracks)}")
+    # 🔥 STRICT FILTER - Only SoundCloud tracks
+    tracks = [t for t in all_tracks if "soundcloud" in str(t.uri).lower()]
+    
+    print(f"Tracks found after filter: {len(tracks)}")
 
     if not tracks:
-        await ctx.send("\u274c No songs found.")
+        await ctx.send("❌ No playable SoundCloud tracks found")
         return
 
-    if isinstance(tracks, wavelink.Playlist):
-        added = player.queue.put(tracks)
-        await ctx.send(f"Queued playlist `{tracks.name}` with {added} tracks.")
+    if isinstance(all_tracks, wavelink.Playlist):
+        added = player.queue.put(all_tracks)
+        await ctx.send(f"Queued playlist `{all_tracks.name}` with {added} tracks.")
     else:
         for index, found_track in enumerate(tracks[:5], start=1):
             print(
@@ -918,7 +919,9 @@ async def play_command(ctx, *, query=None):
                 f"(score {official_track_score(found_track)})"
             )
 
-        track = pick_best_track(tracks)
+        track = tracks[0]
+        # 🔥 Step 2 — PRINT TRACK SOURCE (DEBUG)
+        print("TRACK URI:", track.uri)
         set_track_requester(ctx, track)
 
         if player.playing or player.paused:
@@ -946,7 +949,7 @@ async def play_command(ctx, *, query=None):
             
             await ctx.send(embed=embed, view=NowPlayingView())
 
-    if isinstance(tracks, wavelink.Playlist) and not player.playing:
+    if isinstance(all_tracks, wavelink.Playlist) and not player.playing:
         await play_next(player)
         if player.current:
             await ctx.send(embed=build_now_playing_embed(player.current), view=NowPlayingView())
