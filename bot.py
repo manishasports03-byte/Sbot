@@ -499,22 +499,21 @@ async def play_next(player):
 
 
 async def search_best_track(query):
-    # 🔥 FORCE SOUNDCLOUD ONLY
-    all_tracks = await wavelink.Playable.search(f"scsearch:{query}")
+    # 🔥 Use YouTube search with official audio filter
+    tracks = await wavelink.Playable.search(f"ytsearch:{query} official audio")
 
-    # 🔥 DEBUG - Show all results
-    for i, t in enumerate(all_tracks[:5]):
-        print(f"Result {i+1}: {t.title} | {t.uri}")
+    print(f"Tracks found: {len(tracks)}")
 
-    # 🔥 FORCE FILTER - Only SoundCloud
-    tracks = [t for t in all_tracks if "soundcloud.com" in t.uri]
-
-    print(f"Tracks found after filter: {len(tracks)}")
-
-    if not tracks or isinstance(all_tracks, wavelink.Playlist):
+    if not tracks or isinstance(tracks, wavelink.Playlist):
         return None
 
-    return tracks[0]
+    for index, found_track in enumerate(tracks[:5], start=1):
+        print(
+            f"Result {index}: {found_track.title} - {found_track.author} "
+            f"(score {official_track_score(found_track)})"
+        )
+
+    return pick_best_track(tracks)
 
 
 async def queue_spotify_tracks(ctx, player, searches, source_type):
@@ -883,9 +882,9 @@ async def play_command(ctx, *, query=None):
         await queue_spotify_tracks(ctx, player, searches, source_type)
         return
 
-    # 🔥 FORCE SOUNDCLOUD ONLY
+    # 🔥 Use YouTube search with official audio filter
     try:
-        all_tracks = await wavelink.Playable.search(f"scsearch:{query}")
+        all_tracks = await wavelink.Playable.search(f"ytsearch:{query} official audio")
     except wavelink.LavalinkLoadException:
         await ctx.send("Lavalink could not load that track.")
         return
@@ -893,16 +892,9 @@ async def play_command(ctx, *, query=None):
         await ctx.send("Lavalink is not connected yet.")
         return
 
-    # 🔥 DEBUG - Show all results
-    for i, t in enumerate(all_tracks[:5]):
-        print(f"Result {i+1}: {t.title} | {t.uri}")
+    print(f"Tracks found: {len(all_tracks)}")
 
-    # 🔥 FORCE FILTER - Only SoundCloud
-    tracks = [t for t in all_tracks if "soundcloud.com" in t.uri]
-
-    print(f"Tracks found after filter: {len(tracks)}")
-
-    if not tracks:
+    if not all_tracks:
         await ctx.send("❌ No songs found")
         return
 
@@ -910,8 +902,13 @@ async def play_command(ctx, *, query=None):
         added = player.queue.put(all_tracks)
         await ctx.send(f"Queued playlist `{all_tracks.name}` with {added} tracks.")
     else:
-        track = tracks[0]
-        print("TRACK URI:", track.uri)
+        for index, found_track in enumerate(all_tracks[:5], start=1):
+            print(
+                f"Result {index}: {found_track.title} - {found_track.author} "
+                f"(score {official_track_score(found_track)})"
+            )
+
+        track = pick_best_track(all_tracks)
         set_track_requester(ctx, track)
 
         if player.playing or player.paused:
