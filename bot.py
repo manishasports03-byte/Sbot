@@ -147,11 +147,10 @@ def build_ytdlp_queued_embed(track, position):
 
 def _extract_track_data(query):
     ydl_opts = {
-        "format": "bestaudio/best",
+        "format": "bestaudio",
         "noplaylist": True,
         "quiet": True,
-        "default_search": "ytsearch",
-        "extract_flat": False
+        "cookiefile": "cookies.txt"
     }
     cleaned_query = query.strip()
     lookup = cleaned_query if cleaned_query.lower().startswith(("http://", "https://")) else f"ytsearch1:{cleaned_query}"
@@ -823,7 +822,8 @@ def _extract_stream_url(query):
     ydl_opts = {
         "format": "bestaudio",
         "noplaylist": True,
-        "quiet": True
+        "quiet": True,
+        "cookiefile": "cookies.txt"
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
