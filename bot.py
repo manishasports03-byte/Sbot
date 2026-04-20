@@ -810,13 +810,14 @@ class AFKConfirmView(discord.ui.View):
 
 @bot.event
 async def on_ready():
-    try:
-        await connect_lavalink()
-        print("Lavalink node connected.")
-    except Exception as exc:
-        print(f"Lavalink connection failed: {exc}")
+    print(f"Logged in as {bot.user}")
 
-    print(f"\u2705 Bot is online as {bot.user}")
+    node = wavelink.Node(
+        uri="ws://13.127.61.86:2333",
+        password="youshallnotpass"
+    )
+
+    await wavelink.Pool.connect(nodes=[node], client=bot)
 
 
 @bot.event
