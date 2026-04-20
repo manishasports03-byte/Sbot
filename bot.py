@@ -1,9 +1,9 @@
 import discord
 from discord.ext import commands
 from datetime import datetime, timezone
+from dataclasses import dataclass, field
 from spotipy.oauth2 import SpotifyClientCredentials
 import spotipy
-import wavelink
 import random
 import os
 import asyncio
@@ -30,9 +30,452 @@ responses = [
 afk_users = {}
 MAX_AFK_PINGS_TO_SHOW = 5
 MAX_SPOTIFY_PLAYLIST_TRACKS = 50
-lavalink_connected = False
 music_loop_enabled = {}
-music_requesters = {}
+
+
+@dataclass
+class MusicState:
+    queue: list = field(default_factory=list)
+    current: dict | None = None
+    volume: float = 1.0
+    loop: bool = False
+    text_channel_id: int | None = None
+    skip_requested: bool = False
+
+
+music_states = {}
+
+
+def get_queue_state(ctx):
+    state_key = ctx.guild.id if ctx.guild else ctx.author.id
+    state = music_states.get(state_key)
+
+    if state is None:
+        state = MusicState()
+        music_states[state_key] = state
+
+    return state
+
+
+def get_queue_state_for_guild(guild):
+    if not guild:
+        return None
+
+    state = music_states.get(guild.id)
+
+    if state is None:
+        state = MusicState()
+        music_states[guild.id] = state
+
+    return state
+
+
+def format_music_duration(seconds):
+    total_seconds = int(seconds or 0)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+
+    return f"{minutes}:{seconds:02d}"
+
+
+def format_music_track(track):
+    url = track.get("webpage_url")
+    title = track.get("title", "Unknown track")
+    return f"[{title}]({url})" if url else title
+
+
+def build_ytdlp_now_playing_embed(track):
+    embed = discord.Embed(title="\U0001f4bf Now Playing", color=discord.Color.dark_gray())
+    embed.description = (
+        f"{format_music_track(track)}\n"
+        f"By: `{track.get('uploader', 'Unknown')}`\n"
+        f"Duration: `{format_music_duration(track.get('duration'))}`\n"
+        f"Requested by _{track.get('requester', 'Unknown')}_"
+    )
+
+    if track.get("thumbnail"):
+        embed.set_thumbnail(url=track["thumbnail"])
+
+    return embed
+
+
+def build_ytdlp_queue_embed(state, page):
+    tracks = state.queue
+    per_page = 10
+    total_pages = max(1, (len(tracks) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    start = page * per_page
+    page_tracks = tracks[start:start + per_page]
+
+    embed = discord.Embed(title="Music Queue", color=discord.Color.dark_gray())
+
+    if state.current:
+        embed.description = (
+            f"Now Playing: {format_music_track(state.current)}\n"
+            f"By: `{state.current.get('uploader', 'Unknown')}`\n\n"
+        )
+    else:
+        embed.description = "Nothing is playing right now.\n\n"
+
+    if page_tracks:
+        lines = []
+        for index, track in enumerate(page_tracks, start=start + 1):
+            lines.append(
+                f"`{index}` • {track.get('title', 'Unknown track')} — {track.get('uploader', 'Unknown')}"
+            )
+        embed.description += "\n".join(lines)
+    else:
+        embed.description += "The queue is currently empty."
+
+    embed.set_footer(text=f"Page {page + 1}/{total_pages}")
+    return embed
+
+
+def build_ytdlp_queued_embed(track, position):
+    embed = discord.Embed(title="Track Queued", color=discord.Color.dark_gray())
+    embed.description = (
+        f"\u2705 {format_music_track(track)} added to queue.\n"
+        f"By: `{track.get('uploader', 'Unknown')}`\n"
+        f"Position: `{position}`"
+    )
+    return embed
+
+
+def _extract_track_data(query):
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "noplaylist": True,
+        "quiet": True,
+        "default_search": "ytsearch",
+        "extract_flat": False
+    }
+    cleaned_query = query.strip()
+    lookup = cleaned_query if cleaned_query.lower().startswith(("http://", "https://")) else f"ytsearch1:{cleaned_query}"
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(lookup, download=False)
+
+    if not info:
+        return None
+
+    if "entries" in info:
+        entries = info.get("entries") or []
+        if not entries:
+            return None
+        info = entries[0]
+
+    stream_url = info.get("url")
+
+    if not stream_url:
+        formats = info.get("formats") or []
+        for item in reversed(formats):
+            if item.get("url"):
+                stream_url = item["url"]
+                break
+
+    return {
+        "title": info.get("title") or cleaned_query,
+        "uploader": info.get("uploader") or info.get("channel") or "Unknown",
+        "duration": info.get("duration") or 0,
+        "thumbnail": info.get("thumbnail"),
+        "webpage_url": info.get("webpage_url") or info.get("original_url"),
+        "stream_url": stream_url,
+        "search_query": cleaned_query
+    }
+
+
+async def fetch_track(query, requester):
+    track = await asyncio.to_thread(_extract_track_data, query)
+    if not track:
+        return None
+    track["requester"] = requester
+    return track
+
+
+async def refresh_track(track):
+    source = track.get("webpage_url") or track.get("search_query")
+    refreshed = await asyncio.to_thread(_extract_track_data, source)
+
+    if not refreshed:
+        return None
+
+    refreshed["requester"] = track.get("requester", "Unknown")
+    return refreshed
+
+
+async def connect_music_voice(ctx):
+    if not ctx.author.voice or not ctx.author.voice.channel:
+        await ctx.send("Join VC first")
+        return None
+
+    voice_channel = ctx.author.voice.channel
+    voice_client = ctx.voice_client
+
+    if voice_client and voice_client.channel != voice_channel:
+        await voice_client.move_to(voice_channel)
+        return voice_client
+
+    if voice_client:
+        return voice_client
+
+    try:
+        return await voice_channel.connect(self_deaf=True)
+    except discord.ClientException:
+        voice_client = ctx.voice_client
+        if voice_client and voice_client.channel != voice_channel:
+            await voice_client.move_to(voice_channel)
+        return voice_client
+    except discord.Forbidden:
+        await ctx.send("I need permission to join and speak in that voice channel.")
+    except discord.HTTPException:
+        await ctx.send("Could not join the voice channel right now.")
+
+    return None
+
+
+def schedule_music_advance(guild_id, error):
+    if error:
+        print(f"Playback error in guild {guild_id}: {error}")
+
+    asyncio.run_coroutine_threadsafe(advance_music_queue(guild_id), bot.loop)
+
+
+async def start_next_track(guild):
+    state = get_queue_state_for_guild(guild)
+    voice_client = guild.voice_client if guild else None
+
+    if not state or not voice_client or not voice_client.is_connected():
+        return
+
+    while state.queue:
+        queued_track = state.queue.pop(0)
+        playable_track = await refresh_track(queued_track)
+
+        if not playable_track or not playable_track.get("stream_url"):
+            continue
+
+        state.current = playable_track
+
+        try:
+            source = discord.PCMVolumeTransformer(
+                discord.FFmpegPCMAudio(
+                    playable_track["stream_url"],
+                    before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+                    options="-vn"
+                ),
+                volume=state.volume
+            )
+            voice_client.play(
+                source,
+                after=lambda error, guild_id=guild.id: schedule_music_advance(guild_id, error)
+            )
+        except Exception:
+            state.current = None
+            continue
+
+        if state.text_channel_id:
+            channel = bot.get_channel(state.text_channel_id)
+            if channel:
+                await channel.send(embed=build_ytdlp_now_playing_embed(playable_track), view=YTDLPNowPlayingView())
+
+        return
+
+    state.current = None
+
+
+async def advance_music_queue(guild_id):
+    guild = bot.get_guild(guild_id)
+    state = get_queue_state_for_guild(guild)
+
+    if not guild or not state:
+        return
+
+    finished_track = state.current
+
+    if state.skip_requested:
+        state.skip_requested = False
+    elif finished_track and state.loop:
+        state.queue.append(finished_track.copy())
+
+    state.current = None
+
+    voice_client = guild.voice_client
+    if voice_client and voice_client.is_connected():
+        await start_next_track(guild)
+
+
+async def queue_music_queries(ctx, queries, source_type="track"):
+    state = get_queue_state(ctx)
+    voice_client = await connect_music_voice(ctx)
+
+    if not voice_client:
+        return
+
+    state.text_channel_id = ctx.channel.id
+    queued_tracks = []
+    queued_positions = []
+
+    if source_type != "track":
+        await ctx.send(f"Loading Spotify {source_type}...")
+
+    for query in queries:
+        track = await fetch_track(query, ctx.author.display_name)
+        if not track:
+            continue
+        state.queue.append(track)
+        queued_tracks.append(track)
+        queued_positions.append(len(state.queue))
+
+    if not queued_tracks:
+        if source_type == "track":
+            await ctx.send("No songs found.")
+        else:
+            await ctx.send("\u274c I could not match those Spotify tracks on YouTube.")
+        return
+
+    if not voice_client.is_playing() and not voice_client.is_paused() and not state.current:
+        await start_next_track(ctx.guild)
+
+    if source_type == "track":
+        await ctx.send(embed=build_ytdlp_queued_embed(queued_tracks[0], queued_positions[0]))
+    else:
+        count = len(queued_tracks)
+        await ctx.send(f"Queued {count} track{'s' if count != 1 else ''} from Spotify.")
+
+
+class YTDLPNowPlayingView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+
+    def get_voice_and_state(self, interaction):
+        guild = interaction.guild
+        if not guild:
+            return None, None
+        return guild.voice_client, get_queue_state_for_guild(guild)
+
+    @discord.ui.button(label="Pause", style=discord.ButtonStyle.secondary)
+    async def pause_button(self, interaction, button):
+        voice_client, state = self.get_voice_and_state(interaction)
+
+        if not voice_client or not state or not state.current:
+            await interaction.response.send_message("Nothing is playing right now.", ephemeral=True)
+            return
+
+        if voice_client.is_paused():
+            voice_client.resume()
+            button.label = "Pause"
+        else:
+            voice_client.pause()
+            button.label = "Resume"
+
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="Skip", style=discord.ButtonStyle.secondary)
+    async def skip_button(self, interaction, button):
+        voice_client, state = self.get_voice_and_state(interaction)
+
+        if not voice_client or not state or not state.current:
+            await interaction.response.send_message("Nothing is playing right now.", ephemeral=True)
+            return
+
+        state.skip_requested = True
+        voice_client.stop()
+        await interaction.response.send_message("Skipped.", ephemeral=True)
+
+    @discord.ui.button(label="Stop", style=discord.ButtonStyle.danger)
+    async def stop_button(self, interaction, button):
+        voice_client, state = self.get_voice_and_state(interaction)
+
+        if not voice_client or not state:
+            await interaction.response.send_message("I am not playing anything.", ephemeral=True)
+            return
+
+        state.queue.clear()
+        state.current = None
+        state.skip_requested = False
+        if voice_client.is_playing() or voice_client.is_paused():
+            voice_client.stop()
+
+        await interaction.response.send_message("Stopped and cleared the queue.", ephemeral=True)
+
+    @discord.ui.button(label="Loop", style=discord.ButtonStyle.secondary)
+    async def loop_button(self, interaction, button):
+        voice_client, state = self.get_voice_and_state(interaction)
+
+        if not interaction.guild or not voice_client or not state:
+            await interaction.response.send_message("Loop only works inside a server.", ephemeral=True)
+            return
+
+        state.loop = not state.loop
+        music_loop_enabled[interaction.guild.id] = state.loop
+        await interaction.response.send_message(
+            f"Loop {'enabled' if state.loop else 'disabled'}.",
+            ephemeral=True
+        )
+
+    @discord.ui.button(label="Shuffle", style=discord.ButtonStyle.secondary)
+    async def shuffle_button(self, interaction, button):
+        voice_client, state = self.get_voice_and_state(interaction)
+
+        if not voice_client or not state or not state.queue:
+            await interaction.response.send_message("The queue is currently empty.", ephemeral=True)
+            return
+
+        random.shuffle(state.queue)
+        await interaction.response.send_message("Queue shuffled.", ephemeral=True)
+
+
+class YTDLPQueueView(discord.ui.View):
+    def __init__(self, guild_id, author_id):
+        super().__init__(timeout=180)
+        self.guild_id = guild_id
+        self.author_id = author_id
+        self.page = 0
+        self.update_buttons()
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This queue menu is not for you.", ephemeral=True)
+            return False
+
+        return True
+
+    def get_state(self):
+        return music_states.get(self.guild_id)
+
+    def update_buttons(self):
+        state = self.get_state()
+        queue_length = len(state.queue) if state else 0
+        total_pages = max(1, (queue_length + 9) // 10)
+        self.previous_button.disabled = self.page <= 0
+        self.next_button.disabled = self.page >= total_pages - 1
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
+    async def previous_button(self, interaction, button):
+        state = self.get_state()
+
+        if not state:
+            await interaction.response.send_message("The queue is no longer available.", ephemeral=True)
+            return
+
+        self.page -= 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=build_ytdlp_queue_embed(state, self.page), view=self)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
+    async def next_button(self, interaction, button):
+        state = self.get_state()
+
+        if not state:
+            await interaction.response.send_message("The queue is no longer available.", ephemeral=True)
+            return
+
+        self.page += 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=build_ytdlp_queue_embed(state, self.page), view=self)
 
 
 def format_duration(started_at):
@@ -378,6 +821,18 @@ async def resolve_spotify_url_async(query):
     return await bot.loop.run_in_executor(None, resolve_spotify_url, query)
 
 
+def strip_search_prefix(query):
+    query = query.strip()
+    prefixes = ("ytsearch:", "ytmsearch:", "scsearch:", "amsearch:", "spsearch:")
+    lowered = query.lower()
+
+    for prefix in prefixes:
+        if lowered.startswith(prefix):
+            return query[len(prefix):].strip()
+
+    return query
+
+
 def _extract_stream_url(query):
     ydl_opts = {
         "format": "bestaudio",
@@ -400,7 +855,7 @@ async def get_stream_url(query):
 
 
 def build_music_search_query(query):
-    query = query.strip()
+    query = strip_search_prefix(query)
     lowered = query.lower()
     search_prefixes = ("scsearch:", "ytsearch:", "ytmsearch:", "amsearch:", "spsearch:")
 
@@ -488,6 +943,22 @@ def get_player(ctx):
     return player
 
 
+def get_voice_client(ctx):
+    voice_client = ctx.voice_client
+
+    if isinstance(voice_client, discord.VoiceClient):
+        return voice_client
+
+    return None
+
+
+def get_music_state_key(ctx):
+    if ctx.guild:
+        return ctx.guild.id
+
+    return ctx.author.id
+
+
 async def get_or_connect_player(ctx):
     if not ctx.author.voice or not ctx.author.voice.channel:
         await send_notice(ctx, "Join a voice channel first.")
@@ -528,21 +999,13 @@ async def play_next(player):
 
 
 async def search_best_track(query):
-    # 🔥 REMOVE DOUBLE PREFIX - Clean query first
-    query = query.strip()
-
-    if not query.startswith(("ytsearch:", "ytmsearch:", "scsearch:", "http")):
-        search_query = f"ytsearch:{query}"
-    else:
-        search_query = query
-
-    # 🔥 Try YouTube Music first
+    clean_query = strip_search_prefix(query)
+    search_query = build_music_search_query(clean_query)
     tracks = await wavelink.Playable.search(search_query)
 
-    # 🔥 Fallback to SoundCloud if YT fails
     if not tracks:
         print("YT failed, trying SoundCloud...")
-        tracks = await wavelink.Playable.search(f"scsearch:{query}")
+        tracks = await wavelink.Playable.search(f"scsearch:{clean_query}")
 
     print(f"Tracks found: {len(tracks)}")
 
@@ -840,29 +1303,6 @@ class AFKConfirmView(discord.ui.View):
 async def on_ready():
     print(f"Logged in as {bot.user}")
 
-    node = wavelink.Node(
-        uri="ws://13.127.61.86:2333",
-        password="youshallnotpass"
-    )
-
-    await wavelink.Pool.connect(nodes=[node], client=bot)
-
-
-@bot.event
-async def on_wavelink_track_end(payload):
-    guild_id = payload.player.guild.id if payload.player.guild else None
-
-    if guild_id and music_loop_enabled.get(guild_id) and payload.track:
-        try:
-            payload.player.queue.put(payload.track)
-        except Exception:
-            pass
-        
-        await play_next(payload.player)
-        return
-
-    await play_next(payload.player)
-
 
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -889,10 +1329,10 @@ async def on_voice_state_update(member, before, after):
 
 @bot.command(name="join")
 async def join_command(ctx):
-    player = await get_or_connect_player(ctx)
+    voice_client = await connect_music_voice(ctx)
 
-    if player:
-        await send_success(ctx, f"Joined **{player.channel.name}** successfully.")
+    if voice_client:
+        await send_success(ctx, f"Joined **{voice_client.channel.name}** successfully.")
 
 
 @bot.command(name="about", aliases=["info"])
@@ -906,58 +1346,32 @@ async def play_command(ctx, *, query=None):
         await ctx.send("Use it like: `play song name or link`")
         return
 
-    if not ctx.author.voice or not ctx.author.voice.channel:
-        await ctx.send("Join VC first")
-        return
-
-    voice_channel = ctx.author.voice.channel
-    vc = ctx.voice_client
-
-    if vc and vc.channel != voice_channel:
-        await vc.move_to(voice_channel)
-    elif not vc:
+    if is_spotify_url(query):
         try:
-            vc = await voice_channel.connect()
-        except discord.ClientException:
-            vc = ctx.voice_client
-        except discord.Forbidden:
-            await ctx.send("I need permission to join and speak in that voice channel.")
+            source_type, searches = await resolve_spotify_url_async(query)
+        except RuntimeError as error:
+            await ctx.send(str(error))
             return
-        except discord.HTTPException:
-            await ctx.send("Could not join the voice channel right now.")
+        except Exception:
+            await ctx.send("Could not read that Spotify link right now.")
             return
 
-    try:
-        stream_url = await get_stream_url(query)
-    except Exception:
-        await ctx.send("Could not fetch a playable stream for that search.")
+        await queue_music_queries(ctx, searches, source_type)
         return
 
-    if not stream_url:
-        await ctx.send("No songs found.")
-        return
-
-    if vc.is_playing():
-        vc.stop()
-
-    try:
-        vc.play(discord.FFmpegPCMAudio(stream_url))
-    except Exception:
-        await ctx.send("FFmpeg could not start playback for that track.")
-        return
-
-    await ctx.send(f"Now playing: `{query}`")
+    await queue_music_queries(ctx, [strip_search_prefix(query)])
 
 
 @bot.command(name="pause")
 async def pause_command(ctx):
-    player = get_player(ctx)
+    voice_client = ctx.voice_client
+    state = get_queue_state(ctx)
 
-    if not player or not player.playing:
+    if not voice_client or not state.current or not voice_client.is_playing():
         await ctx.send("Nothing is playing right now.")
         return
 
-    await player.pause(True)
+    voice_client.pause()
     await ctx.send(
         embed=build_music_action_embed(
             "Music has been successfully paused.",
@@ -968,13 +1382,14 @@ async def pause_command(ctx):
 
 @bot.command(name="resume")
 async def resume_command(ctx):
-    player = get_player(ctx)
+    voice_client = ctx.voice_client
+    state = get_queue_state(ctx)
 
-    if not player:
+    if not voice_client or not state.current or not voice_client.is_paused():
         await ctx.send("Nothing is playing right now.")
         return
 
-    await player.pause(False)
+    voice_client.resume()
     await ctx.send(
         embed=build_music_action_embed(
             "Music playback has been resumed.",
@@ -985,13 +1400,15 @@ async def resume_command(ctx):
 
 @bot.command(name="skip", aliases=["s"])
 async def skip_command(ctx):
-    player = get_player(ctx)
+    voice_client = ctx.voice_client
+    state = get_queue_state(ctx)
 
-    if not player or not player.playing:
+    if not voice_client or not state.current or not (voice_client.is_playing() or voice_client.is_paused()):
         await ctx.send("Nothing is playing right now.")
         return
 
-    await player.skip(force=True)
+    state.skip_requested = True
+    voice_client.stop()
     await ctx.send(
         embed=build_music_action_embed(
             "Skipped the current song.",
@@ -1002,73 +1419,89 @@ async def skip_command(ctx):
 
 @bot.command(name="stop")
 async def stop_command(ctx):
-    player = get_player(ctx)
+    voice_client = ctx.voice_client
+    state = get_queue_state(ctx)
 
-    if not player:
+    if not voice_client:
         await ctx.send("I am not playing anything.")
         return
 
-    player.queue.clear()
-    await player.stop()
+    state.queue.clear()
+    state.current = None
+    state.skip_requested = False
+    state.loop = False
+    music_loop_enabled[get_music_state_key(ctx)] = False
+
+    if voice_client.is_playing() or voice_client.is_paused():
+        voice_client.stop()
+
     await ctx.send("Stopped and cleared the queue.")
 
 
 @bot.command(name="leave", aliases=["disconnect", "dc"])
 async def leave_command(ctx):
-    player = get_player(ctx)
-
-    if not player:
+    voice_client = ctx.voice_client
+    if not voice_client:
         await ctx.send("I am not connected to voice.")
         return
 
-    await player.disconnect()
+    state = get_queue_state(ctx)
+    state.queue.clear()
+    state.current = None
+    state.skip_requested = False
+    state.loop = False
+    music_loop_enabled[get_music_state_key(ctx)] = False
+
+    await voice_client.disconnect()
     await ctx.send(embed=build_music_action_embed("Bot has been disconnected from the voice channel."))
 
 
 @bot.command(name="nowplaying", aliases=["np"])
 async def nowplaying_command(ctx):
-    player = get_player(ctx)
+    voice_client = ctx.voice_client
+    state = get_queue_state(ctx)
 
-    if not player or not player.current:
+    if not voice_client or not state.current or not (voice_client.is_playing() or voice_client.is_paused()):
         await ctx.send("Nothing is playing right now.")
         return
 
-    await ctx.send(embed=build_now_playing_embed(player.current), view=NowPlayingView())
+    await ctx.send(embed=build_ytdlp_now_playing_embed(state.current), view=YTDLPNowPlayingView())
 
 
 @bot.command(name="queue", aliases=["q"])
 async def queue_command(ctx):
-    player = get_player(ctx)
+    state = get_queue_state(ctx)
 
-    if not player:
-        await ctx.send("I am not playing anything.")
-        return
-
-    if player.queue.is_empty:
+    if not state.current and not state.queue:
         await send_notice(ctx, "The queue is currently empty.")
         return
 
-    tracks = list(player.queue)
     await ctx.send(
-        embed=build_queue_embed(player, tracks, 0),
-        view=QueueView(player, tracks, ctx.author.id)
+        embed=build_ytdlp_queue_embed(state, 0),
+        view=YTDLPQueueView(ctx.guild.id, ctx.author.id)
     )
 
 
 @bot.command(name="volume", aliases=["vol"])
 async def volume_command(ctx, volume: int = None):
-    player = get_player(ctx)
+    voice_client = ctx.voice_client
+    state = get_queue_state(ctx)
 
-    if not player:
+    if not voice_client:
         await ctx.send("I am not connected to voice.")
         return
 
     if volume is None:
-        await ctx.send(f"Current volume: {player.volume}%")
+        current_volume = int(state.volume * 100)
+        await ctx.send(f"Current volume: {current_volume}%")
         return
 
     volume = max(0, min(volume, 100))
-    await player.set_volume(volume)
+    state.volume = volume / 100
+
+    if voice_client.source and hasattr(voice_client.source, "volume"):
+        voice_client.source.volume = state.volume
+
     await ctx.send(f"Volume set to {volume}%.")
 
 
@@ -1173,3 +1606,4 @@ if not token:
     raise RuntimeError("DISCORD_TOKEN is not set. Add it to .env before starting the bot.")
 
 bot.run(token)
+
