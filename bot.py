@@ -499,10 +499,11 @@ async def play_next(player):
 
 
 async def search_best_track(query):
-    # 🔥 FORCE ONLY SOUND CLOUD - Let Wavelink handle it
+    # 🔥 PERFECT VERSION - Use scsearch with official audio
+    query_with_audio = f"{query} official audio"
+    
     tracks = await wavelink.Playable.search(
-        query + " official audio",
-        source="soundcloud"
+        f"scsearch:{query_with_audio}"
     )
 
     print(f"Tracks found: {len(tracks)}")
@@ -514,7 +515,6 @@ async def search_best_track(query):
         print(
             f"Result {index}: {found_track.title} - {found_track.author}"
         )
-        print("TRACK URI:", found_track.uri)
 
     return tracks[0]
 
@@ -885,11 +885,12 @@ async def play_command(ctx, *, query=None):
         await queue_spotify_tracks(ctx, player, searches, source_type)
         return
 
-    # 🔥 FORCE ONLY SOUND CLOUD (STRICT MODE) - Let Wavelink handle it
+    # 🔥 PERFECT VERSION - Use scsearch with official audio
+    query_with_audio = f"{query} official audio"
+    
     try:
         tracks = await wavelink.Playable.search(
-            query + " official audio",
-            source="soundcloud"
+            f"scsearch:{query_with_audio}"
         )
     except wavelink.LavalinkLoadException:
         await ctx.send("Lavalink could not load that track.")
@@ -912,9 +913,9 @@ async def play_command(ctx, *, query=None):
             print(
                 f"Result {index}: {found_track.title} - {found_track.author}"
             )
-            print("TRACK URI:", found_track.uri)
 
         track = tracks[0]
+        print("TRACK URI:", track.uri)
         set_track_requester(ctx, track)
 
         if player.playing or player.paused:
