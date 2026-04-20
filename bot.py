@@ -502,8 +502,8 @@ async def search_best_track(query):
     # 🔥 REMOVE DOUBLE PREFIX - Clean query first
     query = query.replace("ytsearch:", "").replace("ytmsearch:", "").replace("scsearch:", "")
 
-    # 🔥 Use YouTube search with official audio filter
-    tracks = await wavelink.Playable.search(f"ytsearch:{query} official audio")
+    # 🔥 Use YouTube Music search (more stable than ytsearch)
+    tracks = await wavelink.Playable.search(f"ytmsearch:{query} official audio")
 
     print(f"Tracks found: {len(tracks)}")
 
@@ -888,9 +888,9 @@ async def play_command(ctx, *, query=None):
     # 🔥 REMOVE DOUBLE PREFIX - Clean query first
     query = query.replace("ytsearch:", "").replace("ytmsearch:", "").replace("scsearch:", "")
 
-    # 🔥 Use YouTube search with official audio filter
+    # 🔥 Use YouTube Music search (more stable than ytsearch)
     try:
-        all_tracks = await wavelink.Playable.search(f"ytsearch:{query} official audio")
+        all_tracks = await wavelink.Playable.search(f"ytmsearch:{query} official audio")
     except wavelink.LavalinkLoadException:
         await ctx.send("Lavalink could not load that track.")
         return
