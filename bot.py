@@ -502,8 +502,13 @@ async def search_best_track(query):
     # 🔥 REMOVE DOUBLE PREFIX - Clean query first
     query = query.replace("ytsearch:", "").replace("ytmsearch:", "").replace("scsearch:", "")
 
-    # 🔥 Use YouTube Music search (more stable than ytsearch)
-    tracks = await wavelink.Playable.search(f"ytmsearch:{query} official audio")
+    # 🔥 Try YouTube Music first
+    tracks = await wavelink.Playable.search(f"ytmsearch:{query}")
+
+    # 🔥 Fallback to SoundCloud if YT fails
+    if not tracks or len(tracks) == 0:
+        print("YT failed, trying SoundCloud...")
+        tracks = await wavelink.Playable.search(f"scsearch:{query}")
 
     print(f"Tracks found: {len(tracks)}")
 
@@ -888,15 +893,27 @@ async def play_command(ctx, *, query=None):
     # 🔥 REMOVE DOUBLE PREFIX - Clean query first
     query = query.replace("ytsearch:", "").replace("ytmsearch:", "").replace("scsearch:", "")
 
-    # 🔥 Use YouTube Music search (more stable than ytsearch)
+    # 🔥 Try YouTube Music first
     try:
-        all_tracks = await wavelink.Playable.search(f"ytmsearch:{query} official audio")
+        all_tracks = await wavelink.Playable.search(f"ytmsearch:{query}")
     except wavelink.LavalinkLoadException:
         await ctx.send("Lavalink could not load that track.")
         return
     except wavelink.InvalidNodeException:
         await ctx.send("Lavalink is not connected yet.")
         return
+
+    # 🔥 Fallback to SoundCloud if YT fails
+    if not all_tracks or len(all_tracks) == 0:
+        print("YT failed, trying SoundCloud...")
+        try:
+            all_tracks = await wavelink.Playable.search(f"scsearch:{query}")
+        except wavelink.LavalinkLoadException:
+            await ctx.send("Lavalink could not load that track.")
+            return
+        except wavelink.InvalidNodeException:
+            await ctx.send("Lavalink is not connected yet.")
+            return
 
     print(f"Tracks found: {len(all_tracks)}")
 
