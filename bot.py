@@ -498,7 +498,13 @@ async def play_next(player):
 
 
 async def search_best_track(query):
-    tracks = await wavelink.Playable.search(build_music_search_query(query))
+    # improve search quality with "official audio"
+    if not query.startswith("scsearch:"):
+        search_query = f"scsearch:{query} official audio"
+    else:
+        search_query = query
+    
+    tracks = await wavelink.Playable.search(search_query)
 
     print(f"Tracks found: {len(tracks)}")
 
@@ -877,7 +883,11 @@ async def play_command(ctx, *, query=None):
         await queue_spotify_tracks(ctx, player, searches, source_type)
         return
 
-    search_query = build_music_search_query(query)
+    # improve search quality with "official audio"
+    if not query.startswith("scsearch:"):
+        search_query = f"scsearch:{query} official audio"
+    else:
+        search_query = query
 
     try:
         tracks = await wavelink.Playable.search(search_query)
@@ -911,9 +921,19 @@ async def play_command(ctx, *, query=None):
             player.queue.put(track)
             await ctx.send(embed=build_track_queued_embed(track))
         else:
-            await ctx.send(embed=build_track_queued_embed(track))
             await player.play(track)
-            await ctx.send(embed=build_now_playing_embed(track), view=NowPlayingView())
+            
+            # 🔥 NOW PLAYING UI - Send embed reliably
+            embed = discord.Embed(
+                title="🎶 Now Playing",
+                description=f"**{track.title}**",
+                color=discord.Color.blue()
+            )
+            embed.add_field(name="Artist", value=track.author, inline=True)
+            embed.add_field(name="Duration", value=f"{track.length//1000}s", inline=True)
+            embed.set_footer(text=f"Requested by {ctx.author}")
+            
+            await ctx.send(embed=embed, view=NowPlayingView())
 
     if isinstance(tracks, wavelink.Playlist) and not player.playing:
         await play_next(player)
