@@ -478,35 +478,40 @@ async def read_owo_coin_flips(channel):
 
 
 def analyze_coin_flip_probability(flips=None):
-    """Analyze flips and predict the next outcome."""
+    """Analyze which CHOICE leads to more WINS, then predict that choice."""
     if flips is None:
         flips = get_last_25_flips()
     
     if not flips:
         return None
     
-    # Extract chosen values from tuples (chosen, result)
-    chosen_values = [flip[0] for flip in flips]
+    # Separate by choice and count wins/losses for each
+    heads_flips = [flip for flip in flips if flip[0] == "heads"]
+    tails_flips = [flip for flip in flips if flip[0] == "tails"]
     
-    heads_count = chosen_values.count("heads")
-    tails_count = chosen_values.count("tails")
-    total = len(chosen_values)
+    # Count wins for each choice
+    heads_wins = sum(1 for flip in heads_flips if flip[1] == "won")
+    heads_total = len(heads_flips)
+    heads_win_rate = (heads_wins / heads_total * 100) if heads_total > 0 else 0
     
-    heads_prob = (heads_count / total) * 100
-    tails_prob = (tails_count / total) * 100
+    tails_wins = sum(1 for flip in tails_flips if flip[1] == "won")
+    tails_total = len(tails_flips)
+    tails_win_rate = (tails_wins / tails_total * 100) if tails_total > 0 else 0
     
-    # Predict based on which is more likely
-    predicted = "heads" if heads_prob > tails_prob else "tails"
-    confidence = abs(heads_prob - tails_prob)
+    # Predict the choice with HIGHER WIN RATE
+    predicted = "heads" if heads_win_rate >= tails_win_rate else "tails"
+    confidence = abs(heads_win_rate - tails_win_rate)
     
     return {
-        "heads_count": heads_count,
-        "tails_count": tails_count,
-        "total": total,
-        "heads_prob": heads_prob,
-        "tails_prob": tails_prob,
+        "heads_wins": heads_wins,
+        "heads_total": heads_total,
+        "heads_win_rate": heads_win_rate,
+        "tails_wins": tails_wins,
+        "tails_total": tails_total,
+        "tails_win_rate": tails_win_rate,
         "predicted": predicted,
         "confidence": confidence,
+        "total": len(flips),
     }
 
 
@@ -622,11 +627,14 @@ async def coin_flip_stats_command(ctx):
         
         analysis = analyze_coin_flip_probability()
         embed.add_field(
-            name="Chosen Pattern Analysis",
-            value=f"Heads: {analysis['heads_count']} ({analysis['heads_prob']:.1f}%)\n"
-                  f"Tails: {analysis['tails_count']} ({analysis['tails_prob']:.1f}%)",
+            name="Win Rate Analysis",
+            value=f"**Heads**: {analysis['heads_wins']}/{analysis['heads_total']} wins ({analysis['heads_win_rate']:.1f}%)\n"
+                  f"**Tails**: {analysis['tails_wins']}/{analysis['tails_total']} wins ({analysis['tails_win_rate']:.1f}%)",
             inline=False
         )
+        embed.add_field(
+            name="Prediction",
+            value=f"**{analysis['predicted'].upper()}** recommended (higher win rate)\nConfidence: {analysis['confidence']:.1f}%",
     else:
         embed.add_field(
             name="Current Progress",
@@ -866,14 +874,14 @@ async def on_message(message):
                         description=f"Based on last {analysis['total']} flips"
                     )
                     prediction_embed.add_field(
-                        name="Statistics",
-                        value=f"Heads: {analysis['heads_count']} ({analysis['heads_prob']:.1f}%)\n"
-                              f"Tails: {analysis['tails_count']} ({analysis['tails_prob']:.1f}%)",
+                        name="Win Rate Analysis",
+                        value=f"**Heads**: {analysis['heads_wins']}/{analysis['heads_total']} wins ({analysis['heads_win_rate']:.1f}%)\n"
+                              f"**Tails**: {analysis['tails_wins']}/{analysis['tails_total']} wins ({analysis['tails_win_rate']:.1f}%)",
                         inline=False
                     )
                     prediction_embed.add_field(
                         name="Prediction for Next Flip",
-                        value=f"**{analysis['predicted'].upper()}**\nConfidence: {analysis['confidence']:.1f}%",
+                        value=f"**{analysis['predicted'].upper()}** (Higher win rate)\nConfidence: {analysis['confidence']:.1f}%",
                         inline=False
                     )
                     await message.channel.send(embed=prediction_embed)
@@ -1019,17 +1027,17 @@ async def on_message_edit(before, after):
                 prediction_embed = discord.Embed(
                     title="🔮 First Prediction Made",
                     color=discord.Color.blue(),
-                    description=f"Based on last {analysis['total']} flips"
+                    description=f"Based on analysis of {analysis['total']} flips"
                 )
                 prediction_embed.add_field(
-                    name="Statistics",
-                    value=f"Heads: {analysis['heads_count']} ({analysis['heads_prob']:.1f}%)\n"
-                          f"Tails: {analysis['tails_count']} ({analysis['tails_prob']:.1f}%)",
+                    name="Win Rate Analysis",
+                    value=f"**Heads**: {analysis['heads_wins']}/{analysis['heads_total']} wins ({analysis['heads_win_rate']:.1f}%)\n"
+                          f"**Tails**: {analysis['tails_wins']}/{analysis['tails_total']} wins ({analysis['tails_win_rate']:.1f}%)",
                     inline=False
                 )
                 prediction_embed.add_field(
                     name="Prediction for Next Flip",
-                    value=f"**{analysis['predicted'].upper()}**\nConfidence: {analysis['confidence']:.1f}%",
+                    value=f"**{analysis['predicted'].upper()}** (Higher win rate)\nConfidence: {analysis['confidence']:.1f}%",
                     inline=False
                 )
                 await after.channel.send(embed=prediction_embed)
@@ -1073,14 +1081,14 @@ async def on_message_edit(before, after):
                     color=discord.Color.blue(),
                 )
                 new_pred_embed.add_field(
-                    name="Updated Statistics",
-                    value=f"Heads: {analysis['heads_count']} ({analysis['heads_prob']:.1f}%)\n"
-                          f"Tails: {analysis['tails_count']} ({analysis['tails_prob']:.1f}%)",
+                    name="Updated Win Rate Analysis",
+                    value=f"**Heads**: {analysis['heads_wins']}/{analysis['heads_total']} wins ({analysis['heads_win_rate']:.1f}%)\n"
+                          f"**Tails**: {analysis['tails_wins']}/{analysis['tails_total']} wins ({analysis['tails_win_rate']:.1f}%)",
                     inline=False
                 )
                 new_pred_embed.add_field(
                     name="Prediction for Next Flip",
-                    value=f"**{analysis['predicted'].upper()}**\nConfidence: {analysis['confidence']:.1f}%",
+                    value=f"**{analysis['predicted'].upper()}** (Higher win rate)\nConfidence: {analysis['confidence']:.1f}%",
                     inline=False
                 )
                 
