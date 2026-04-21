@@ -13,7 +13,6 @@ load_dotenv()
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
-intents.message_edit = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
