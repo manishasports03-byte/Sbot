@@ -1,5 +1,7 @@
 import os
 import random
+import json
+import re
 from datetime import datetime, timezone
 
 import discord
@@ -15,6 +17,36 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 bad_words = ["mc", "bc", "madarchod", "bhosdike", "chutiya", "idiot", "stupid"]
+
+# Cash tracking
+CASH_DATA_FILE = "cash_data.json"
+TRACKED_USER_ID = 760729575789166652
+USER_WAITING_FOR_CASH = None
+
+def load_cash_data():
+    """Load cash history from file"""
+    try:
+        with open(CASH_DATA_FILE, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_cash_data(data):
+    """Save cash history to file"""
+    with open(CASH_DATA_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
+
+def extract_cash_amount(text):
+    """Extract cash amount from text (e.g., '100,000' or '100000')"""
+    # Look for currency patterns like: $1,234 or 1,234 or just numbers
+    match = re.search(r'[\$₽]?\s*([0-9,]+(?:\.[0-9]{2})?)', text)
+    if match:
+        amount_str = match.group(1).replace(',', '')
+        try:
+            return float(amount_str)
+        except ValueError:
+            return None
+    return None
 
 responses = [
     "bhai chill kar \U0001f602",
@@ -360,6 +392,52 @@ async def on_message(message):
         return
 
     msg = message.content.lower()
+
+    # Track cash for specific user
+    global USER_WAITING_FOR_CASH
+    
+    if message.author.id == TRACKED_USER_ID and msg == "o cash":
+        USER_WAITING_FOR_CASH = TRACKED_USER_ID
+        return
+
+    # Capture cash response from owo bot
+    if USER_WAITING_FOR_CASH == TRACKED_USER_ID and message.author.name.lower() == "owo":
+        cash_amount = extract_cash_amount(message.content)
+        if cash_amount is not None:
+            cash_data = load_cash_data()
+            current_time = datetime.now(timezone.utc).isoformat()
+            
+            user_id_str = str(TRACKED_USER_ID)
+            if user_id_str not in cash_data:
+                cash_data[user_id_str] = []
+            
+            last_amount = None
+            if cash_data[user_id_str]:
+                last_amount = cash_data[user_id_str][-1]['amount']
+            
+            cash_data[user_id_str].append({
+                'amount': cash_amount,
+                'timestamp': current_time
+            })
+            save_cash_data(cash_data)
+            
+            # Send profit/loss message
+            if last_amount is not None:
+                diff = cash_amount - last_amount
+                if diff > 0:
+                    status = f"📈 **Profit**: +{diff:,.0f}"
+                elif diff < 0:
+                    status = f"📉 **Loss**: {diff:,.0f}"
+                else:
+                    status = "➡️ **No change**"
+                
+                await message.channel.send(
+                    f"{message.author.mention} | Current: {cash_amount:,.0f} | {status}",
+                    allowed_mentions=discord.AllowedMentions(users=False)
+                )
+            
+            USER_WAITING_FOR_CASH = None
+        return
 
     if bot.user in message.mentions and not message.reference:
         cleaned = message.content.replace(bot.user.mention, "").strip()
