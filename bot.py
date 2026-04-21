@@ -1,6 +1,8 @@
 import os
 import random
+import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 
 import discord
 from discord.ext import commands
@@ -26,6 +28,55 @@ responses = [
 
 afk_users = {}
 MAX_AFK_PINGS_TO_SHOW = 5
+
+# Coin flip tracking
+MAX_FLIP_RESULTS = 25
+OWO_BOT_ID = 408785106942164992
+
+# Database setup
+DB_PATH = Path("coin_flips.db")
+
+def init_db():
+    """Initialize the coin flip database."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS coin_flips (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            result TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def get_flip_count():
+    """Get total number of flips recorded in database."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM coin_flips")
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
+def add_flip_to_db(result):
+    """Add a coin flip result to the database."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO coin_flips (result) VALUES (?)", (result.lower(),))
+    conn.commit()
+    conn.close()
+
+def get_last_25_flips():
+    """Get the last 25 flips from database."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT result FROM coin_flips ORDER BY id DESC LIMIT 25")
+    results = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return list(reversed(results))  # Return in chronological order
 
 
 def format_duration(started_at):
@@ -319,6 +370,288 @@ class AFKConfirmView(discord.ui.View):
             content="AFK cancelled.",
             view=None,
         )
+
+
+async def read_owo_coin_flips(channel):
+    """Read recent coin flip results from OWO bot messages in the channel."""
+    owo_results = []
+    try:
+        # Read last 100 messages from channel
+        async for message in channel.history(limit=100):
+            if message.author.id == OWO_BOT_ID:
+                content = message.content.lower()
+                # Check for heads or tails in the message
+                if "heads" in content:
+                    owo_results.append("heads")
+                elif "tails" in content:
+                    owo_results.append("tails")
+                
+                # Stop when we have enough data
+                if len(owo_results) >= 50:
+                    break
+    except discord.Forbidden:
+        return None
+    except Exception as e:
+        print(f"Error reading OWO messages: {e}")
+        return None
+    
+    return list(reversed(owo_results))  # Return in chronological order
+
+
+async def sync_flips_from_owo(channel):
+    """Sync coin flip data from OWO bot if database is empty."""
+    if get_flip_count() == 0:
+        owo_flips = await read_owo_coin_flips(channel)
+        if owo_flips:
+            for flip in owo_flips[:MAX_FLIP_RESULTS]:
+                add_flip_to_db(flip)
+
+
+def analyze_coin_flip_probability():
+    """Analyze the last 25 flips and predict the next outcome."""
+    flips = get_last_25_flips()
+    
+    if not flips:
+        return None
+    
+    heads_count = flips.count("heads")
+    tails_count = flips.count("tails")
+    total = len(flips)
+    
+    heads_prob = (heads_count / total) * 100
+    tails_prob = (tails_count / total) * 100
+    
+    # Predict based on which is more likely
+    predicted = "heads" if heads_prob > tails_prob else "tails"
+    confidence = abs(heads_prob - tails_prob)
+    
+    return {
+        "heads_count": heads_count,
+        "tails_count": tails_count,
+        "total": total,
+        "heads_prob": heads_prob,
+        "tails_prob": tails_prob,
+        "predicted": predicted,
+        "confidence": confidence,
+    }
+
+
+@bot.command(name="cf")
+async def coin_flip_command(ctx):
+    """Flip a coin using OWO bot data and predict."""
+    try:
+        # Sync OWO data if database is empty
+        await sync_flips_from_owo(ctx.channel)
+        
+        flip_count = get_flip_count()
+        
+        # First 25 flips: Just show data saved message
+        if flip_count < MAX_FLIP_RESULTS:
+            flips = get_last_25_flips()
+            add_flip_to_db(random.choice(["heads", "tails"]))
+            
+            embed = discord.Embed(
+                title="Coin Flip Data Collection",
+                color=discord.Color.gold(),
+                description=f"Data Saved! ({flip_count + 1}/{MAX_FLIP_RESULTS})"
+            )
+            
+            if flips:
+                results_display = " ".join([f"{'H' if r == 'heads' else 'T'}" for r in flips])
+                embed.add_field(
+                    name="Current Data",
+                    value=f"`{results_display}`\n(H = Heads, T = Tails)",
+                    inline=False
+                )
+                embed.set_footer(text=f"Once we reach {MAX_FLIP_RESULTS} flips, predictions will start!")
+            
+            await ctx.send(embed=embed)
+        else:
+            # After 25 flips: Show prediction
+            add_flip_to_db(random.choice(["heads", "tails"]))
+            analysis = analyze_coin_flip_probability()
+            
+            embed = discord.Embed(
+                title="Coin Flip Prediction",
+                color=discord.Color.gold(),
+                description=f"Based on last {analysis['total']} flips"
+            )
+            
+            embed.add_field(
+                name="Statistics",
+                value=f"Heads: **{analysis['heads_count']}** ({analysis['heads_prob']:.1f}%)\n"
+                      f"Tails: **{analysis['tails_count']}** ({analysis['tails_prob']:.1f}%)",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="Prediction",
+                value=f"**Next Likely: {analysis['predicted'].upper()}**\n"
+                      f"Confidence: {analysis['confidence']:.1f}%",
+                inline=False
+            )
+            
+            await ctx.send(embed=embed)
+            
+    except Exception as e:
+        await ctx.send(f"Error processing coin flip: {str(e)}")
+
+
+@bot.command(name="cfpredict")
+async def coin_flip_predict_command(ctx):
+    """Analyze and predict based on current database."""
+    flip_count = get_flip_count()
+    
+    if flip_count < MAX_FLIP_RESULTS:
+        await ctx.send(f"Not enough data yet! Need {MAX_FLIP_RESULTS} flips to predict. Current: {flip_count}/{MAX_FLIP_RESULTS}")
+        return
+    
+    analysis = analyze_coin_flip_probability()
+    
+    embed = discord.Embed(
+        title="Coin Flip Probability Analysis",
+        color=discord.Color.blue(),
+    )
+    
+    embed.add_field(
+        name="Data from Last Flips",
+        value=f"Total Flips: **{analysis['total']}**\n"
+              f"Heads: **{analysis['heads_count']}** ({analysis['heads_prob']:.1f}%)\n"
+              f"Tails: **{analysis['tails_count']}** ({analysis['tails_prob']:.1f}%)",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="Prediction",
+        value=f"**Predicted Outcome: {analysis['predicted'].upper()}**\n"
+              f"Confidence: {analysis['confidence']:.1f}%",
+        inline=False
+    )
+    
+    embed.set_footer(text="Note: This is based on recent patterns and not guaranteed!")
+    
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="cfstats")
+async def coin_flip_stats_command(ctx):
+    """Display the full history of recent coin flips."""
+    flips = get_last_25_flips()
+    
+    if not flips:
+        await ctx.send("No flip data yet! Use `!cf` to start collecting data.")
+        return
+    
+    # Create a nice display of results
+    results_display = " ".join([f"{'H' if r == 'heads' else 'T'}" for r in flips])
+    
+    analysis = analyze_coin_flip_probability()
+    
+    embed = discord.Embed(
+        title="Coin Flip History",
+        color=discord.Color.purple(),
+    )
+    
+    embed.add_field(
+        name="Last 25 Flips",
+        value=f"`{results_display}`\n(H = Heads, T = Tails)",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="Summary",
+        value=f"Heads: **{analysis['heads_count']}** ({analysis['heads_prob']:.1f}%)\n"
+              f"Tails: **{analysis['tails_count']}** ({analysis['tails_prob']:.1f}%)",
+        inline=False
+    )
+    
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="cfclear")
+async def coin_flip_clear_command(ctx):
+    """Clear all coin flip data (admin only)."""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("Only admins can clear flip data.")
+        return
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM coin_flips")
+    conn.commit()
+    conn.close()
+    
+    await ctx.send("Coin flip data cleared!")
+
+
+@bot.command(name="cfstatus")
+async def coin_flip_status_command(ctx):
+    """Check the current coin flip database status."""
+    flip_count = get_flip_count()
+    
+    embed = discord.Embed(
+        title="Coin Flip System Status",
+        color=discord.Color.green(),
+    )
+    
+    embed.add_field(
+        name="Data Collected",
+        value=f"{flip_count}/{MAX_FLIP_RESULTS} flips",
+        inline=False
+    )
+    
+    if flip_count >= MAX_FLIP_RESULTS:
+        embed.add_field(
+            name="Status",
+            value="✅ Prediction mode ACTIVE\nUse `!cfpredict` to see predictions!",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="Status",
+            value=f"🔄 Collection mode\nNeed {MAX_FLIP_RESULTS - flip_count} more flips to activate predictions!",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="cfsync")
+async def coin_flip_sync_command(ctx):
+    """Manually sync coin flip data from OWO bot messages."""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("Only admins can sync OWO data.")
+        return
+    
+    async with ctx.typing():
+        owo_flips = await read_owo_coin_flips(ctx.channel)
+        
+        if not owo_flips:
+            await ctx.send("❌ Could not read OWO bot messages. Make sure the OWO bot has sent messages in this channel.")
+            return
+        
+        # Count how many new flips we would add
+        current_count = get_flip_count()
+        flips_to_add = min(len(owo_flips), MAX_FLIP_RESULTS - current_count)
+        
+        if flips_to_add > 0:
+            for flip in owo_flips[:flips_to_add]:
+                add_flip_to_db(flip)
+        
+        embed = discord.Embed(
+            title="OWO Data Sync Complete",
+            color=discord.Color.green(),
+        )
+        
+        embed.add_field(
+            name="Results",
+            value=f"Found: {len(owo_flips)} OWO flips\n"
+                  f"Added: {flips_to_add} new flips\n"
+                  f"Total in DB: {get_flip_count()}/{MAX_FLIP_RESULTS}",
+            inline=False
+        )
+        
+        await ctx.send(embed=embed)
 
 
 @bot.event
