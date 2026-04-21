@@ -789,25 +789,153 @@ async def on_message(message):
             )
             continue
 
-    # Coin flip prediction system - listen for OWO bot initial messages
+    # Coin flip prediction system - listen for OWO bot messages
     global cf_listening, cf_channel_id, owo_message_tracking
     if cf_listening and message.author.id == OWO_BOT_ID and message.channel.id == cf_channel_id:
         msg_lower = message.content.lower()
         chosen = None
+        result = None
         
         # Debug: Log all OWO messages in the channel
         print(f"[OWO MESSAGE] {message.content[:100]}")
         
-        # Check for "chose heads/tails" - more flexible patterns
-        if "heads" in msg_lower and ("chose" in msg_lower or "flip" in msg_lower):
+        # Check for "chose heads/tails"
+        if "heads" in msg_lower and "chose" in msg_lower:
             chosen = "heads"
-            print(f"[CF CHOSE] Detected HEADS in: {message.content[:100]}")
-        elif "tails" in msg_lower and ("chose" in msg_lower or "flip" in msg_lower):
+            print(f"[CF CHOSE] Detected HEADS")
+        elif "tails" in msg_lower and "chose" in msg_lower:
             chosen = "tails"
-            print(f"[CF CHOSE] Detected TAILS in: {message.content[:100]}")
+            print(f"[CF CHOSE] Detected TAILS")
         
-        # Store the message ID with chosen value for later when it's edited
-        if chosen:
+        # Check for result in same message (won/lost)
+        if "won" in msg_lower:
+            result = "won"
+            print(f"[CF RESULT] Detected WON")
+        elif "lost" in msg_lower:
+            result = "lost"
+            print(f"[CF RESULT] Detected LOST")
+        
+        # If we have both chosen and result, save immediately
+        if chosen and result:
+            flip_count = get_flip_count()
+            add_flip_to_db(chosen, result)
+            new_flip_count = get_flip_count()
+            
+            print(f"[CF SAVED] Flip {new_flip_count}/{MAX_FLIP_RESULTS} - {chosen} + {result}")
+            
+            # First 25 flips - just collect data
+            if new_flip_count <= MAX_FLIP_RESULTS:
+                flips = get_last_25_flips()
+                chosen_display = " ".join([f"{'H' if flip[0] == 'heads' else 'T'}" for flip in flips])
+                result_display = " ".join([f"{'W' if flip[1] == 'won' else 'L'}" for flip in flips])
+                
+                embed = discord.Embed(
+                    title="✅ Data Saved",
+                    color=discord.Color.green(),
+                    description=f"{new_flip_count}/{MAX_FLIP_RESULTS}"
+                )
+                embed.add_field(
+                    name="Chosen",
+                    value=f"`{chosen_display}`",
+                    inline=False
+                )
+                embed.add_field(
+                    name="Results",
+                    value=f"`{result_display}`",
+                    inline=False
+                )
+                
+                if new_flip_count == MAX_FLIP_RESULTS:
+                    embed.add_field(
+                        name="Status",
+                        value="✅ Collection complete! Making first prediction...",
+                        inline=False
+                    )
+                else:
+                    embed.set_footer(text=f"Need {MAX_FLIP_RESULTS - new_flip_count} more flips")
+                
+                await message.channel.send(embed=embed)
+                
+                # After 25 flips, make the first prediction
+                if new_flip_count == MAX_FLIP_RESULTS:
+                    analysis = analyze_coin_flip_probability()
+                    prediction_embed = discord.Embed(
+                        title="🔮 First Prediction Made",
+                        color=discord.Color.blue(),
+                        description=f"Based on last {analysis['total']} flips"
+                    )
+                    prediction_embed.add_field(
+                        name="Statistics",
+                        value=f"Heads: {analysis['heads_count']} ({analysis['heads_prob']:.1f}%)\n"
+                              f"Tails: {analysis['tails_count']} ({analysis['tails_prob']:.1f}%)",
+                        inline=False
+                    )
+                    prediction_embed.add_field(
+                        name="Prediction for Next Flip",
+                        value=f"**{analysis['predicted'].upper()}**\nConfidence: {analysis['confidence']:.1f}%",
+                        inline=False
+                    )
+                    await message.channel.send(embed=prediction_embed)
+                    add_prediction(26, analysis['predicted'])
+            
+            # After 25 flips - check prediction and make new one
+            elif new_flip_count > MAX_FLIP_RESULTS:
+                # Get last prediction to check if it was correct
+                last_pred = get_last_prediction()
+                
+                if last_pred:
+                    pred_id, flip_num, predicted = last_pred
+                    # Use the actual result (what the user chose) for checking prediction
+                    is_correct = update_prediction(pred_id, chosen)
+                    
+                    # Show result of previous prediction
+                    result_text = "✅ CORRECT!" if is_correct else "❌ WRONG!"
+                    result_color = discord.Color.green() if is_correct else discord.Color.red()
+                    
+                    result_embed = discord.Embed(
+                        title=f"Prediction Result: {result_text}",
+                        color=result_color,
+                    )
+                    result_embed.add_field(
+                        name="Details",
+                        value=f"Predicted: **{predicted.upper()}**\nActual Chosen: **{chosen.upper()}**\nResult: **{result.upper()}**",
+                        inline=False
+                    )
+                    
+                    correct, total = get_prediction_accuracy()
+                    accuracy = (correct / total) * 100
+                    result_embed.add_field(
+                        name="Overall Accuracy",
+                        value=f"{correct}/{total} correct ({accuracy:.1f}%)",
+                        inline=False
+                    )
+                    
+                    await message.channel.send(embed=result_embed)
+                    
+                    # Make new prediction with updated data
+                    analysis = analyze_coin_flip_probability()
+                    
+                    new_pred_embed = discord.Embed(
+                        title="🔮 New Prediction Made",
+                        color=discord.Color.blue(),
+                    )
+                    new_pred_embed.add_field(
+                        name="Updated Statistics",
+                        value=f"Heads: {analysis['heads_count']} ({analysis['heads_prob']:.1f}%)\n"
+                              f"Tails: {analysis['tails_count']} ({analysis['tails_prob']:.1f}%)",
+                        inline=False
+                    )
+                    new_pred_embed.add_field(
+                        name="Prediction for Next Flip",
+                        value=f"**{analysis['predicted'].upper()}**\nConfidence: {analysis['confidence']:.1f}%",
+                        inline=False
+                    )
+                    
+                    await message.channel.send(embed=new_pred_embed)
+                    add_prediction(new_flip_count + 1, analysis['predicted'])
+        
+        # If only chosen but no result yet, store for potential edit tracking
+        elif chosen:
             owo_message_tracking[message.id] = chosen
             print(f"[CF TRACKING] Message {message.id} tracked as: {chosen}")
 
