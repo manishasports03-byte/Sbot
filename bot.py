@@ -30,7 +30,7 @@ afk_users = {}
 MAX_AFK_PINGS_TO_SHOW = 5
 
 # Coin flip tracking
-MAX_FLIP_RESULTS = 25
+MAX_FLIP_RESULTS = 20
 OWO_BOT_ID = 408785106942164992
 cf_channel_id = None  # Channel where CF system is active
 cf_listening = False  # Whether system is listening for OWO results
@@ -824,7 +824,7 @@ async def on_message(message):
             
             print(f"[CF SAVED] Flip {new_flip_count}/{MAX_FLIP_RESULTS} - {chosen} + {result}")
             
-            # First 25 flips - just collect data
+            # First 20 flips - just collect data
             if new_flip_count <= MAX_FLIP_RESULTS:
                 flips = get_last_25_flips()
                 chosen_display = " ".join([f"{'H' if flip[0] == 'heads' else 'T'}" for flip in flips])
@@ -980,7 +980,7 @@ async def on_message_edit(before, after):
         
         print(f"[CF SAVED] Flip {new_flip_count}/{MAX_FLIP_RESULTS} - {chosen} + {result}")
         
-        # First 25 flips - just collect data
+        # First 20 flips - just collect data
         if new_flip_count <= MAX_FLIP_RESULTS:
             flips = get_last_25_flips()
             chosen_display = " ".join([f"{'H' if flip[0] == 'heads' else 'T'}" for flip in flips])
@@ -1013,7 +1013,7 @@ async def on_message_edit(before, after):
             
             await after.channel.send(embed=embed)
             
-            # After 25 flips, make the first prediction
+            # After 20 flips, make the first prediction
             if new_flip_count == MAX_FLIP_RESULTS:
                 analysis = analyze_coin_flip_probability()
                 prediction_embed = discord.Embed(
@@ -1033,9 +1033,9 @@ async def on_message_edit(before, after):
                     inline=False
                 )
                 await after.channel.send(embed=prediction_embed)
-                add_prediction(26, analysis['predicted'])
+                add_prediction(21, analysis['predicted'])
         
-        # After 25 flips - check prediction and make new one
+        # After 20 flips - check prediction and make new one
         elif new_flip_count > MAX_FLIP_RESULTS:
             last_pred = get_last_prediction()
             
