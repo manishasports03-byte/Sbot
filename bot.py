@@ -797,7 +797,7 @@ async def on_message(message):
         result = None
         
         # Debug: Log all OWO messages in the channel
-        print(f"[OWO MESSAGE] {message.content[:100]}")
+        print(f"[OWO MESSAGE] Full: {message.content}")
         
         # Check for "chose heads/tails"
         if "heads" in msg_lower and "chose" in msg_lower:
@@ -807,12 +807,13 @@ async def on_message(message):
             chosen = "tails"
             print(f"[CF CHOSE] Detected TAILS")
         
-        # Check for result in same message (won/lost)
-        if "won" in msg_lower:
-            result = "won"
-            print(f"[CF RESULT] Detected WON")
-        elif "lost" in msg_lower:
+        # Check for result in same message (won/lost) - check lost FIRST
+        if "lost" in msg_lower or "lose" in msg_lower:
             result = "lost"
+            print(f"[CF RESULT] Detected LOST in: {msg_lower}")
+        elif "won" in msg_lower or "win" in msg_lower:
+            result = "won"
+            print(f"[CF RESULT] Detected WON in: {msg_lower}")
             print(f"[CF RESULT] Detected LOST")
         
         # If we have both chosen and result, save immediately
