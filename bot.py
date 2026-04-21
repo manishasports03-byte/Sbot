@@ -807,13 +807,14 @@ async def on_message(message):
             chosen = "tails"
             print(f"[CF CHOSE] Detected TAILS")
         
-        # Check for result in same message (won/lost) - check lost FIRST
-        if "lost" in msg_lower or "lose" in msg_lower:
+        # Check for result in same message (won/lost) - be specific to avoid emoji matching
+        # Look for "and you won" or "and you lost" or "lost it all"
+        if "and you lost" in msg_lower or "lost it all" in msg_lower:
             result = "lost"
-            print(f"[CF RESULT] Detected LOST")
-        elif "won" in msg_lower or "win" in msg_lower:
+            print(f"[CF RESULT] Detected LOST (initial message)")
+        elif "and you won" in msg_lower:
             result = "won"
-            print(f"[CF RESULT] Detected WON")
+            print(f"[CF RESULT] Detected WON (initial message)")
         
         # If we have BOTH chosen and result, save immediately
         if chosen and result:
@@ -960,11 +961,11 @@ async def on_message_edit(before, after):
     
     print(f"[OWO EDIT] Message {after.id} edited. New content: {after.content[:100]}")
     
-    # Check for won/lost in edited message - check lost FIRST
-    if "lost" in msg_lower or "lose" in msg_lower:
+    # Check for won/lost in edited message - be specific to avoid emoji matching
+    if "and you lost" in msg_lower or "lost it all" in msg_lower:
         result = "lost"
         print(f"[CF RESULT FROM EDIT] Detected LOST")
-    elif "won" in msg_lower or "win" in msg_lower:
+    elif "and you won" in msg_lower:
         result = "won"
         print(f"[CF RESULT FROM EDIT] Detected WON")
     
