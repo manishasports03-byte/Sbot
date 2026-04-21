@@ -935,6 +935,18 @@ async def on_message(message):
 
     # Coin flip prediction system - listen for OWO bot messages
     global cf_listening, cf_channel_id, owo_message_tracking
+    
+    # Auto-start system if OWO coin flip detected and not already listening
+    if message.author.id == OWO_BOT_ID:
+        msg_lower = message.content.lower()
+        if ("chose" in msg_lower and ("heads" in msg_lower or "tails" in msg_lower)) or ("and you won" in msg_lower or "lost it all" in msg_lower):
+            # This looks like a coin flip message - auto-start if not running
+            if not cf_listening:
+                cf_listening = True
+                cf_channel_id = message.channel.id
+                clear_all_data()  # Start fresh
+                print(f"[CF AUTO-START] System started in channel {message.channel.id}")
+    
     if cf_listening and message.author.id == OWO_BOT_ID and message.channel.id == cf_channel_id:
         msg_lower = message.content.lower()
         chosen = None
@@ -1091,6 +1103,15 @@ async def on_message(message):
 async def on_message_edit(before, after):
     """Listen for OWO bot message edits to capture won/lost result."""
     global cf_listening, cf_channel_id, owo_message_tracking
+    
+    # Auto-start system if OWO coin flip result detected and not already listening
+    if after.author.id == OWO_BOT_ID and not cf_listening:
+        msg_lower = after.content.lower()
+        if "and you won" in msg_lower or "lost it all" in msg_lower or "and you lost" in msg_lower:
+            cf_listening = True
+            cf_channel_id = after.channel.id
+            clear_all_data()
+            print(f"[CF AUTO-START FROM EDIT] System started in channel {after.channel.id}")
     
     if not cf_listening or after.author.id != OWO_BOT_ID or after.channel.id != cf_channel_id:
         return
