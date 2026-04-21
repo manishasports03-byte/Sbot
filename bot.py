@@ -588,6 +588,37 @@ def get_pattern_prediction():
     }
 
 
+def predict_next_outcome():
+    """Predict next actual coin outcome (not choice) based on won/lost results."""
+    flips = get_last_25_flips()
+
+    if len(flips) < 10:
+        return "Not enough data", 0
+
+    # Extract actual outcomes based on results
+    # If WON → actual outcome matched what was chosen
+    # If LOST → actual outcome was opposite of chosen
+    outcomes = []
+
+    for chosen, result in flips:
+        if result == "won":
+            outcomes.append("H" if chosen == "heads" else "T")
+        else:
+            outcomes.append("T" if chosen == "heads" else "H")
+
+    # Count last 10 outcomes
+    recent = outcomes[-10:]
+    heads = recent.count("H")
+    tails = recent.count("T")
+
+    total = len(recent)
+
+    if heads > tails:
+        return "HEADS", round(heads/total*100, 2)
+    else:
+        return "TAILS", round(tails/total*100, 2)
+
+
 @bot.command(name="cf")
 async def coin_flip_command(ctx):
     """Start/reset coin flip prediction system."""
@@ -791,6 +822,32 @@ async def coin_flip_pattern_predict_command(ctx):
             inline=False
         )
     
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="cfoutcome")
+async def predict_outcome_command(ctx):
+    """Predict next actual coin outcome based on won/lost results."""
+    pred, conf = predict_next_outcome()
+
+    embed = discord.Embed(
+        title="🎯 Outcome Prediction",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(
+        name="Next Flip Likely Outcome",
+        value=f"**{pred}**",
+        inline=False
+    )
+
+    embed.add_field(
+        name="Confidence",
+        value=f"{conf}%",
+        inline=False
+    )
+
+    embed.set_footer(text="Based on actual coin outcomes (not your choices)")
     await ctx.send(embed=embed)
 
 
@@ -1016,6 +1073,7 @@ async def on_message(message):
                 # After 25 flips, make the first prediction
                 if new_flip_count == MAX_FLIP_RESULTS:
                     analysis = analyze_coin_flip_probability()
+                    outcome_pred, outcome_conf = predict_next_outcome()
                     prediction_embed = discord.Embed(
                         title="🔮 First Prediction Made",
                         color=discord.Color.blue(),
@@ -1028,8 +1086,13 @@ async def on_message(message):
                         inline=False
                     )
                     prediction_embed.add_field(
-                        name="Prediction for Next Flip",
+                        name="Win-Rate Prediction",
                         value=f"**{analysis['predicted'].upper()}** (Higher win rate)\nConfidence: {analysis['confidence']:.1f}%",
+                        inline=False
+                    )
+                    prediction_embed.add_field(
+                        name="🎯 Outcome Prediction",
+                        value=f"**{outcome_pred}**\nConfidence: {outcome_conf}%",
                         inline=False
                     )
                     await message.channel.send(embed=prediction_embed)
@@ -1071,6 +1134,7 @@ async def on_message(message):
                     
                     # Make new prediction with updated data
                     analysis = analyze_coin_flip_probability()
+                    outcome_pred, outcome_conf = predict_next_outcome()
                     
                     new_pred_embed = discord.Embed(
                         title="🔮 New Prediction Made",
@@ -1078,13 +1142,18 @@ async def on_message(message):
                     )
                     new_pred_embed.add_field(
                         name="Updated Statistics",
-                        value=f"Heads: {analysis['heads_count']} ({analysis['heads_prob']:.1f}%)\n"
-                              f"Tails: {analysis['tails_count']} ({analysis['tails_prob']:.1f}%)",
+                        value=f"Heads: {analysis['heads_wins']}/{analysis['heads_total']} wins ({analysis['heads_win_rate']:.1f}%)\n"
+                              f"Tails: {analysis['tails_wins']}/{analysis['tails_total']} wins ({analysis['tails_win_rate']:.1f}%)",
                         inline=False
                     )
                     new_pred_embed.add_field(
-                        name="Prediction for Next Flip",
+                        name="Win-Rate Prediction",
                         value=f"**{analysis['predicted'].upper()}**\nConfidence: {analysis['confidence']:.1f}%",
+                        inline=False
+                    )
+                    new_pred_embed.add_field(
+                        name="🎯 Outcome Prediction",
+                        value=f"**{outcome_pred}**\nConfidence: {outcome_conf}%",
                         inline=False
                     )
                     
@@ -1181,6 +1250,7 @@ async def on_message_edit(before, after):
             # After 20 flips, make the first prediction
             if new_flip_count == MAX_FLIP_RESULTS:
                 analysis = analyze_coin_flip_probability()
+                outcome_pred, outcome_conf = predict_next_outcome()
                 prediction_embed = discord.Embed(
                     title="🔮 First Prediction Made",
                     color=discord.Color.blue(),
@@ -1193,8 +1263,13 @@ async def on_message_edit(before, after):
                     inline=False
                 )
                 prediction_embed.add_field(
-                    name="Prediction for Next Flip",
+                    name="Win-Rate Prediction",
                     value=f"**{analysis['predicted'].upper()}** (Higher win rate)\nConfidence: {analysis['confidence']:.1f}%",
+                    inline=False
+                )
+                prediction_embed.add_field(
+                    name="🎯 Outcome Prediction",
+                    value=f"**{outcome_pred}**\nConfidence: {outcome_conf}%",
                     inline=False
                 )
                 await after.channel.send(embed=prediction_embed)
@@ -1232,6 +1307,7 @@ async def on_message_edit(before, after):
                 await after.channel.send(embed=result_embed)
                 
                 analysis = analyze_coin_flip_probability()
+                outcome_pred, outcome_conf = predict_next_outcome()
                 
                 new_pred_embed = discord.Embed(
                     title="🔮 New Prediction Made",
@@ -1244,8 +1320,13 @@ async def on_message_edit(before, after):
                     inline=False
                 )
                 new_pred_embed.add_field(
-                    name="Prediction for Next Flip",
+                    name="Win-Rate Prediction",
                     value=f"**{analysis['predicted'].upper()}** (Higher win rate)\nConfidence: {analysis['confidence']:.1f}%",
+                    inline=False
+                )
+                new_pred_embed.add_field(
+                    name="🎯 Outcome Prediction",
+                    value=f"**{outcome_pred}**\nConfidence: {outcome_conf}%",
                     inline=False
                 )
                 
