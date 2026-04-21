@@ -13,6 +13,7 @@ load_dotenv()
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
+intents.message_edit = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -545,6 +546,43 @@ async def coin_flip_stop_command(ctx):
     await ctx.send("Coin flip system stopped.")
 
 
+@bot.command(name="cftest")
+async def coin_flip_test_command(ctx):
+    """Test if the system is listening."""
+    global cf_listening, cf_channel_id, owo_message_tracking
+    
+    embed = discord.Embed(
+        title="Coin Flip System Status",
+        color=discord.Color.blue(),
+    )
+    
+    embed.add_field(
+        name="Listening",
+        value="✅ YES" if cf_listening else "❌ NO",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="Channel ID",
+        value=f"{cf_channel_id or 'Not Set'} (Current: {ctx.channel.id})",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="Tracked Messages",
+        value=f"{len(owo_message_tracking)} awaiting result",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="Data Count",
+        value=f"{get_flip_count()}/25",
+        inline=False
+    )
+    
+    await ctx.send(embed=embed)
+
+
 @bot.command(name="cfstats")
 async def coin_flip_stats_command(ctx):
     """Display current statistics and predictions."""
@@ -758,15 +796,21 @@ async def on_message(message):
         msg_lower = message.content.lower()
         chosen = None
         
-        # Check for "you chose heads/tails"
-        if "you chose heads" in msg_lower or "chose heads" in msg_lower:
+        # Debug: Log all OWO messages in the channel
+        print(f"[OWO MESSAGE] {message.content[:100]}")
+        
+        # Check for "chose heads/tails" - more flexible patterns
+        if "heads" in msg_lower and ("chose" in msg_lower or "flip" in msg_lower):
             chosen = "heads"
-        elif "you chose tails" in msg_lower or "chose tails" in msg_lower:
+            print(f"[CF CHOSE] Detected HEADS in: {message.content[:100]}")
+        elif "tails" in msg_lower and ("chose" in msg_lower or "flip" in msg_lower):
             chosen = "tails"
+            print(f"[CF CHOSE] Detected TAILS in: {message.content[:100]}")
         
         # Store the message ID with chosen value for later when it's edited
         if chosen:
             owo_message_tracking[message.id] = chosen
+            print(f"[CF TRACKING] Message {message.id} tracked as: {chosen}")
 
     await bot.process_commands(message)
 
@@ -775,6 +819,12 @@ async def on_message(message):
 async def on_message_edit(before, after):
     """Listen for OWO bot message edits to capture won/lost result."""
     global cf_listening, cf_channel_id, owo_message_tracking
+    
+    # Debug: Log all OWO edits
+    if after.author.id == OWO_BOT_ID:
+        print(f"[OWO EDIT] Channel: {after.channel.id}, CF Channel: {cf_channel_id}, Listening: {cf_listening}")
+        print(f"[OWO EDIT] Message ID: {after.id}, Tracked: {after.id in owo_message_tracking}")
+        print(f"[OWO EDIT] Content: {after.content[:100]}")
     
     if not cf_listening or after.author.id != OWO_BOT_ID or after.channel.id != cf_channel_id:
         return
@@ -787,11 +837,15 @@ async def on_message_edit(before, after):
     msg_lower = after.content.lower()
     result = None
     
-    # Check for won/lost in edited message
-    if "you won" in msg_lower or "you win" in msg_lower:
+    # Check for won/lost in edited message - more flexible patterns
+    if "won" in msg_lower:
         result = "won"
-    elif "you lost" in msg_lower or "you lose" in msg_lower:
+    elif "lost" in msg_lower:
         result = "lost"
+    elif "lose" in msg_lower:
+        result = "lost"
+    
+    print(f"[CF RESULT] Chosen: {chosen}, Result: {result}")
     
     if result:
         # Remove from tracking
@@ -801,6 +855,8 @@ async def on_message_edit(before, after):
         flip_count = get_flip_count()
         add_flip_to_db(chosen, result)
         new_flip_count = get_flip_count()
+        
+        print(f"[CF SAVED] Flip {new_flip_count}/{MAX_FLIP_RESULTS} - {chosen} + {result}")
         
         # First 25 flips - just collect data
         if new_flip_count <= MAX_FLIP_RESULTS:
