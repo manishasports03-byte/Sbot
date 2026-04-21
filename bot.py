@@ -515,6 +515,79 @@ def analyze_coin_flip_probability(flips=None):
     }
 
 
+def get_all_flips():
+    """Get all flips from database for pattern analysis."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT chosen FROM coin_flips ORDER BY id ASC")
+    results = cursor.fetchall()
+    conn.close()
+    return [flip[0][0].upper() for flip in results]  # Return H or T
+
+
+def analyze_sequence_patterns(sequence_length=3):
+    """Analyze repeating patterns in chosen sequence."""
+    choices = get_all_flips()
+    
+    if len(choices) < sequence_length:
+        return None
+    
+    # Extract all N-grams
+    sequences = {}
+    for i in range(len(choices) - sequence_length + 1):
+        pattern = "".join(choices[i:i + sequence_length])
+        if pattern not in sequences:
+            sequences[pattern] = {"count": 0, "follows": {}}
+        sequences[pattern]["count"] += 1
+        
+        # Track what comes after this pattern
+        if i + sequence_length < len(choices):
+            next_choice = choices[i + sequence_length]
+            sequences[pattern]["follows"][next_choice] = sequences[pattern]["follows"].get(next_choice, 0) + 1
+    
+    return sequences
+
+
+def get_pattern_prediction():
+    """Predict next flip based on sequence patterns."""
+    choices = get_all_flips()
+    
+    if len(choices) < 3:
+        return None
+    
+    # Get current pattern (last 3 flips)
+    current_pattern = "".join(choices[-3:])
+    
+    # Analyze all sequences to find pattern
+    sequences = analyze_sequence_patterns(3)
+    
+    if current_pattern not in sequences:
+        return None
+    
+    pattern_data = sequences[current_pattern]
+    
+    if not pattern_data["follows"]:
+        return None
+    
+    # Find which continuation is most frequent
+    most_common = max(pattern_data["follows"].items(), key=lambda x: x[1])
+    predicted_choice = most_common[0]
+    frequency = most_common[1]
+    
+    # Calculate confidence as percentage
+    total_continuations = sum(pattern_data["follows"].values())
+    confidence = (frequency / total_continuations) * 100
+    
+    return {
+        "pattern": current_pattern,
+        "predicted": predicted_choice,
+        "frequency": frequency,
+        "total": total_continuations,
+        "confidence": confidence,
+        "pattern_count": pattern_data["count"],
+    }
+
+
 @bot.command(name="cf")
 async def coin_flip_command(ctx):
     """Start/reset coin flip prediction system."""
@@ -635,7 +708,8 @@ async def coin_flip_stats_command(ctx):
         embed.add_field(
             name="Prediction",
             value=f"**{analysis['predicted'].upper()}** recommended (higher win rate)\nConfidence: {analysis['confidence']:.1f}%",
-    else:
+            inline=False
+        )
         embed.add_field(
             name="Current Progress",
             value=f"Recording: {flip_count}/{MAX_FLIP_RESULTS}\n"
@@ -652,6 +726,68 @@ async def coin_flip_stats_command(ctx):
         embed.add_field(
             name="Prediction Accuracy",
             value=f"{correct}/{total} predictions correct ({accuracy:.1f}%)",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="cfpredict")
+async def coin_flip_pattern_predict_command(ctx):
+    """Display pattern-based prediction for next flip."""
+    flip_count = get_flip_count()
+    
+    if flip_count < 3:
+        await ctx.send("Need at least 3 flips of data for pattern analysis!")
+        return
+    
+    pattern_pred = get_pattern_prediction()
+    
+    if not pattern_pred:
+        await ctx.send("Not enough pattern data yet. Keep flipping!")
+        return
+    
+    choices = get_all_flips()
+    current_sequence = "".join(choices[-3:])
+    
+    embed = discord.Embed(
+        title="🔍 Pattern-Based Prediction",
+        color=discord.Color.orange(),
+    )
+    
+    embed.add_field(
+        name="Current Sequence",
+        value=f"`{current_sequence}`\n(Last 3 flips)",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="Pattern Analysis",
+        value=f"Pattern `{pattern_pred['pattern']}` has appeared **{pattern_pred['pattern_count']}** times",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="Continuation Frequency",
+        value=f"When `{pattern_pred['pattern']}` appears:\n"
+              f"• **{pattern_pred['predicted']}**: {pattern_pred['frequency']} times\n"
+              f"• Total continuations: {pattern_pred['total']}",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="Prediction",
+        value=f"**Predict: {pattern_pred['predicted'].upper()}**\nBased on sequence pattern\nConfidence: {pattern_pred['confidence']:.1f}%",
+        inline=False
+    )
+    
+    # Also show win-rate prediction for comparison
+    if flip_count >= MAX_FLIP_RESULTS:
+        win_rate_pred = analyze_coin_flip_probability()
+        embed.add_field(
+            name="Comparison",
+            value=f"**Win-Rate Prediction**: {win_rate_pred['predicted'].upper()} ({win_rate_pred['confidence']:.1f}%)\n"
+                  f"**Pattern Prediction**: {pattern_pred['predicted'].upper()} ({pattern_pred['confidence']:.1f}%)",
             inline=False
         )
     
