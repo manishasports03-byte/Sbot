@@ -13,12 +13,29 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+DEFAULT_PREFIX = "."
+BOT_START_TIME = datetime.now(timezone.utc)
+
+
+def get_command_prefix(bot_instance, message):
+    if not message.guild or not db_connection:
+        return DEFAULT_PREFIX
+
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute("SELECT prefix FROM guild_settings WHERE guild_id = ?", (message.guild.id,))
+        result = cursor.fetchone()
+        return result[0] if result and result[0] else DEFAULT_PREFIX
+    except sqlite3.Error:
+        return DEFAULT_PREFIX
+
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
 intents.members = True
 
-bot = commands.Bot(command_prefix=".", intents=intents, help_command=None)
+bot = commands.Bot(command_prefix=get_command_prefix, intents=intents, help_command=None)
 
 # ===== CONFIG =====
 bad_words = ["mc", "bc", "madarchod", "bhosdike", "chutiya", "idiot", "stupid"]
@@ -143,6 +160,13 @@ def init_invite_database():
             CREATE TABLE IF NOT EXISTS bot_state (
                 key TEXT PRIMARY KEY,
                 value TEXT
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS guild_settings (
+                guild_id INTEGER PRIMARY KEY,
+                prefix TEXT DEFAULT '.'
             )
         """)
         
@@ -396,6 +420,58 @@ def is_message_channel_blacklisted(guild_id, channel_id):
     except sqlite3.Error as e:
         print(f"Database error: {e}")
         return False
+
+
+def set_guild_prefix(guild_id, prefix):
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO guild_settings (guild_id, prefix) VALUES (?, ?)",
+            (guild_id, prefix)
+        )
+        db_connection.commit()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+
+def delete_guild_prefix(guild_id):
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute("DELETE FROM guild_settings WHERE guild_id = ?", (guild_id,))
+        db_connection.commit()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+
+def get_guild_prefix(guild_id):
+    if not db_connection:
+        return DEFAULT_PREFIX
+
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute("SELECT prefix FROM guild_settings WHERE guild_id = ?", (guild_id,))
+        result = cursor.fetchone()
+        return result[0] if result and result[0] else DEFAULT_PREFIX
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return DEFAULT_PREFIX
+
+
+def format_relative_duration(from_dt):
+    delta = datetime.now(timezone.utc) - from_dt
+    total_seconds = max(int(delta.total_seconds()), 0)
+    days, remainder = divmod(total_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, _ = divmod(remainder, 60)
+
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes or not parts:
+        parts.append(f"{minutes}m")
+    return " ".join(parts[:3])
 
 def set_join_channel(guild_id, channel_id):
     """Set join message channel"""
@@ -953,6 +1029,24 @@ async def send_lunexa_welcome(ctx):
     await ctx.send(embed=embed, view=WhAlienInfoView())
 
 
+def build_bot_info_embed():
+    support_url = os.getenv("SUPPORT_URL", "https://discord.com")
+    embed = discord.Embed(color=discord.Color.from_str("#2b2d31"))
+    embed.set_author(
+        name="whAlien ✨",
+        icon_url=bot.user.display_avatar.url if bot.user and bot.user.display_avatar else None
+    )
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user and bot.user.display_avatar else None)
+    embed.description = (
+        "Hey, I'm whAlien\n\n"
+        f"**Prefix:** `{DEFAULT_PREFIX}`\n"
+        f"**Servers:** `{len(bot.guilds)}`\n"
+        f"**Support:** [Support Server]({support_url})"
+    )
+    embed.set_footer(text="Powered by whAlien")
+    return embed
+
+
 class AFKConfirmView(discord.ui.View):
     def __init__(self, member, reason=None):
         super().__init__(timeout=30)
@@ -1329,6 +1423,337 @@ async def on_voice_state_update(member, before, after):
 @bot.command(name="about", aliases=["info"])
 async def about_command(ctx):
     await send_bot_info(ctx)
+
+
+@bot.command(name="botinfo")
+async def botinfo_command(ctx):
+    """Show bot information"""
+    await ctx.send(embed=build_bot_info_embed())
+
+
+@bot.command(name="ping")
+async def ping_command(ctx):
+    """Show bot latency"""
+    embed = discord.Embed(
+        title="Pong",
+        description=f"Latency: **{round(bot.latency * 1000)}ms**",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="support")
+async def support_command(ctx):
+    """Send support server link"""
+    support_url = os.getenv("SUPPORT_URL", "https://discord.com")
+    embed = discord.Embed(
+        title="Support Server",
+        description=f"Join here: {support_url}",
+        color=discord.Color.blurple()
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="invite")
+async def invite_command(ctx):
+    """Show bot invite link"""
+    if not bot.user:
+        await ctx.send("Bot user is not ready yet.")
+        return
+
+    permissions = discord.Permissions(
+        manage_messages=True,
+        manage_channels=True,
+        manage_roles=True,
+        moderate_members=True,
+        kick_members=True,
+        ban_members=True,
+        view_audit_log=True,
+        send_messages=True,
+        embed_links=True,
+        attach_files=True,
+        read_message_history=True,
+        use_external_emojis=True,
+        add_reactions=True,
+        connect=True,
+        speak=True,
+        move_members=True,
+        manage_webhooks=True,
+    )
+    invite_url = discord.utils.oauth_url(bot.user.id, permissions=permissions)
+    embed = discord.Embed(
+        title="Invite Bot",
+        description=f"[Click here to invite the bot]({invite_url})",
+        color=discord.Color.blurple()
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="serverinfo")
+async def serverinfo_command(ctx):
+    """Show server details"""
+    guild = ctx.guild
+    if not guild:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    embed = discord.Embed(
+        title=f"{guild.name} Server Info",
+        color=discord.Color.blurple()
+    )
+    embed.add_field(name="Owner", value=str(guild.owner) if guild.owner else "Unknown", inline=True)
+    embed.add_field(name="Members", value=str(guild.member_count), inline=True)
+    embed.add_field(name="Roles", value=str(len(guild.roles)), inline=True)
+    embed.add_field(name="Channels", value=str(len(guild.channels)), inline=True)
+    embed.add_field(name="Text Channels", value=str(len(guild.text_channels)), inline=True)
+    embed.add_field(name="Voice Channels", value=str(len(guild.voice_channels)), inline=True)
+    embed.add_field(name="Created", value=discord.utils.format_dt(guild.created_at, style="F"), inline=False)
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="userinfo")
+async def userinfo_command(ctx, member: discord.Member = None):
+    """Show user info"""
+    if not ctx.guild:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    target = member or ctx.author
+    roles = [role.mention for role in reversed(target.roles[1:])]
+    top_roles = ", ".join(roles[:10]) if roles else "No roles"
+
+    embed = discord.Embed(
+        title=f"{target} User Info",
+        color=target.color if target.color != discord.Color.default() else discord.Color.blurple()
+    )
+    embed.add_field(name="ID", value=str(target.id), inline=True)
+    embed.add_field(name="Joined", value=discord.utils.format_dt(target.joined_at, style="F") if target.joined_at else "Unknown", inline=True)
+    embed.add_field(name="Created", value=discord.utils.format_dt(target.created_at, style="F"), inline=True)
+    embed.add_field(name="Top Role", value=target.top_role.mention if target.top_role else "None", inline=True)
+    embed.add_field(name="Roles", value=top_roles, inline=False)
+    embed.set_thumbnail(url=target.display_avatar.url)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="roleinfo")
+async def roleinfo_command(ctx, *, role: discord.Role):
+    """Show role info"""
+    if not ctx.guild:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    embed = discord.Embed(
+        title=f"{role.name} Role Info",
+        color=role.color if role.color != discord.Color.default() else discord.Color.blurple()
+    )
+    embed.add_field(name="ID", value=str(role.id), inline=True)
+    embed.add_field(name="Members", value=str(len(role.members)), inline=True)
+    embed.add_field(name="Position", value=str(role.position), inline=True)
+    embed.add_field(name="Mentionable", value="Yes" if role.mentionable else "No", inline=True)
+    embed.add_field(name="Hoisted", value="Yes" if role.hoist else "No", inline=True)
+    embed.add_field(name="Created", value=discord.utils.format_dt(role.created_at, style="F"), inline=False)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="vcinfo")
+async def vcinfo_command(ctx, channel: discord.VoiceChannel = None):
+    """Show voice channel info"""
+    if not ctx.guild:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    target_channel = channel
+    if target_channel is None and isinstance(ctx.author, discord.Member) and ctx.author.voice:
+        target_channel = ctx.author.voice.channel
+
+    if target_channel is None:
+        await ctx.send("Provide a voice channel or join one first.")
+        return
+
+    embed = discord.Embed(
+        title=f"{target_channel.name} Voice Channel",
+        color=discord.Color.blurple()
+    )
+    embed.add_field(name="ID", value=str(target_channel.id), inline=True)
+    embed.add_field(name="Members", value=str(len(target_channel.members)), inline=True)
+    embed.add_field(name="User Limit", value=str(target_channel.user_limit or "Unlimited"), inline=True)
+    embed.add_field(name="Bitrate", value=f"{target_channel.bitrate // 1000} kbps", inline=True)
+    embed.add_field(name="Category", value=target_channel.category.name if target_channel.category else "None", inline=True)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="avatar")
+async def avatar_command(ctx, member: discord.Member = None):
+    """Show user's avatar"""
+    target = member or ctx.author
+    embed = discord.Embed(
+        title=f"{target} Avatar",
+        color=discord.Color.blurple()
+    )
+    embed.set_image(url=target.display_avatar.url)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="banner")
+async def banner_command(ctx, member: discord.Member = None):
+    """Show user's banner"""
+    target = member or ctx.author
+    try:
+        user = await bot.fetch_user(target.id)
+    except discord.HTTPException:
+        await ctx.send("I could not fetch that user's banner right now.")
+        return
+
+    if not user.banner:
+        await ctx.send("This user does not have a banner.")
+        return
+
+    embed = discord.Embed(
+        title=f"{target} Banner",
+        color=discord.Color.blurple()
+    )
+    embed.set_image(url=user.banner.url)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="guildbanner")
+async def guildbanner_command(ctx):
+    """Show server banner"""
+    if not ctx.guild:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    if not ctx.guild.banner:
+        await ctx.send("This server does not have a banner.")
+        return
+
+    embed = discord.Embed(
+        title=f"{ctx.guild.name} Banner",
+        color=discord.Color.blurple()
+    )
+    embed.set_image(url=ctx.guild.banner.url)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="membercount")
+async def membercount_command(ctx):
+    """Show total members count"""
+    if not ctx.guild:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    embed = discord.Embed(
+        title="Member Count",
+        description=f"Total members: **{ctx.guild.member_count}**",
+        color=discord.Color.blurple()
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="shards")
+async def shards_command(ctx):
+    """Show shard info"""
+    shard_id = ctx.guild.shard_id if ctx.guild and ctx.guild.shard_id is not None else 0
+    shard_count = bot.shard_count or 1
+    latency = round(bot.latency * 1000)
+
+    embed = discord.Embed(
+        title="Shard Info",
+        color=discord.Color.blurple()
+    )
+    embed.add_field(name="Shard", value=f"{shard_id + 1}/{shard_count}", inline=True)
+    embed.add_field(name="Latency", value=f"{latency}ms", inline=True)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="permissions")
+async def permissions_command(ctx):
+    """Show bot permissions in server"""
+    if not ctx.guild:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    perms = ctx.channel.permissions_for(ctx.guild.me)
+    enabled = []
+    for name in [
+        "send_messages", "embed_links", "attach_files", "manage_messages",
+        "manage_channels", "manage_roles", "moderate_members", "view_audit_log"
+    ]:
+        if getattr(perms, name, False):
+            enabled.append(name.replace("_", " ").title())
+
+    embed = discord.Embed(
+        title="Bot Permissions",
+        description="\n".join(enabled) if enabled else "No notable permissions.",
+        color=discord.Color.blurple()
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="accountage")
+async def accountage_command(ctx, member: discord.Member = None):
+    """Show account creation age"""
+    target = member or ctx.author
+    embed = discord.Embed(
+        title="Account Age",
+        description=(
+            f"{target.mention} created their account on "
+            f"**{target.created_at.strftime('%d %b %Y')}**\n"
+            f"Age: **{format_relative_duration(target.created_at)}**"
+        ),
+        color=discord.Color.blurple()
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="uptime")
+async def uptime_command(ctx):
+    """Show bot uptime"""
+    embed = discord.Embed(
+        title="Uptime",
+        description=f"Bot uptime: **{format_relative_duration(BOT_START_TIME)}**",
+        color=discord.Color.blurple()
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="setprefix")
+@commands.has_permissions(administrator=True)
+async def setprefix_command(ctx, *, new_prefix: str):
+    """Change bot prefix"""
+    if not ctx.guild:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    new_prefix = new_prefix.strip()
+    if not new_prefix or len(new_prefix) > 5:
+        await ctx.send("Prefix must be between 1 and 5 characters.")
+        return
+
+    set_guild_prefix(ctx.guild.id, new_prefix)
+    await ctx.send(embed=discord.Embed(
+        title="Prefix Updated",
+        description=f"New prefix: `{new_prefix}`",
+        color=discord.Color.green()
+    ))
+
+
+@bot.command(name="deleteprefix")
+@commands.has_permissions(administrator=True)
+async def deleteprefix_command(ctx):
+    """Reset prefix to default"""
+    if not ctx.guild:
+        await ctx.send("This command can only be used in a server.")
+        return
+
+    delete_guild_prefix(ctx.guild.id)
+    await ctx.send(embed=discord.Embed(
+        title="Prefix Reset",
+        description=f"Prefix reset to `{DEFAULT_PREFIX}`",
+        color=discord.Color.orange()
+    ))
 
 
 # ===== MODERATION COMMANDS =====
@@ -2146,6 +2571,25 @@ class ModuleView(discord.ui.View):
 `.modlogs [@user]` - View moderation logs
 `.afk [reason]` - Set AFK status
 `role @user Role Name` - Toggle roles
+`.serverinfo` - Show server details
+`.userinfo [@user]` - Show user info
+`.roleinfo @role` - Show role info
+`.vcinfo [channel]` - Show voice channel info
+`.avatar [@user]` - Show user's avatar
+`.banner [@user]` - Show user's banner
+`.guildbanner` - Show server banner
+`.support` - Send support server link
+`.membercount` - Show total members count
+`.stats` - Show bot stats
+`.shards` - Show shard info
+`.permissions` - Show bot permissions
+`.accountage [@user]` - Show account age
+`.invite` - Show bot invite link
+`.uptime` - Show bot uptime
+`.botinfo` - Show bot information
+`.ping` - Show bot latency
+`.setprefix [new prefix]` - Change bot prefix
+`.deleteprefix` - Reset prefix
                 """
             )
         
@@ -2274,6 +2718,25 @@ class HelpView(discord.ui.View):
 `.modlogs [@user]` - View moderation logs
 `.afk [reason]` - Set AFK status
 `role @user Role Name` - Toggle roles
+`.serverinfo` - Show server details
+`.userinfo [@user]` - Show user info
+`.roleinfo @role` - Show role info
+`.vcinfo [channel]` - Show voice channel info
+`.avatar [@user]` - Show user's avatar
+`.banner [@user]` - Show user's banner
+`.guildbanner` - Show server banner
+`.support` - Send support server link
+`.membercount` - Show total members count
+`.stats` - Show bot stats
+`.shards` - Show shard info
+`.permissions` - Show bot permissions
+`.accountage [@user]` - Show account age
+`.invite` - Show bot invite link
+`.uptime` - Show bot uptime
+`.botinfo` - Show bot information
+`.ping` - Show bot latency
+`.setprefix [new prefix]` - Change bot prefix
+`.deleteprefix` - Reset prefix
                 """
             )
         
@@ -2410,27 +2873,31 @@ Create 'Temporary Channels' for temp VCs
 @bot.command(name="stats")
 async def stats_command(ctx):
     """Show bot statistics"""
+    total_users = sum(guild.member_count or 0 for guild in bot.guilds)
+    command_count = len(bot.commands)
     embed = discord.Embed(
-        title="📊 SBot Statistics",
+        title="📊 Bot Statistics",
         color=discord.Color.blurple()
     )
 
     embed.add_field(
-        name="🖥️ Server Info",
-        value=f"Members: {ctx.guild.member_count}\nChannels: {len(ctx.guild.channels)}",
-        inline=False
+        name="Overview",
+        value=(
+            f"Servers: **{len(bot.guilds)}**\n"
+            f"Users: **{total_users}**\n"
+            f"Commands: **{command_count}**"
+        ),
+        inline=True
     )
 
     embed.add_field(
-        name="📋 Moderation",
-        value=f"Warnings: {sum(len(users) for users in warnings.get(ctx.guild.id, {}).values())}\nLogs: {len(moderation_logs.get(ctx.guild.id, []))}",
-        inline=False
-    )
-
-    embed.add_field(
-        name="🎫 Tickets",
-        value=f"Open Tickets: {len(tickets)}\nTotal Created: {sum(1 for t in tickets.values() if t['created_at'])}",
-        inline=False
+        name="Runtime",
+        value=(
+            f"Latency: **{round(bot.latency * 1000)}ms**\n"
+            f"Uptime: **{format_relative_duration(BOT_START_TIME)}**\n"
+            f"Shard Count: **{bot.shard_count or 1}**"
+        ),
+        inline=True
     )
 
     await ctx.send(embed=embed)
