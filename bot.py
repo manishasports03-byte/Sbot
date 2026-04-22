@@ -74,6 +74,9 @@ TICKET_CATEGORY_NAME = "Tickets"
 TICKET_RESPONSE_CHANNEL = None  # Set if you want ticket responses in specific channel
 tickets = {}  # {channel_id: {"creator": user_id, "created_at": datetime}}
 
+# ===== GIVEAWAY CONFIG =====
+giveaways = {}  # {message_id: {"message_id": int, "channel_id": int, "guild_id": int, "end_time": datetime, "winners": int, "prize": str, "ended": bool, "task": asyncio.Task | None}}
+
 # ===== SECURITY CONFIG =====
 spam_tracker = defaultdict(list)  # {user_id: [timestamps]}
 SPAM_THRESHOLD = 5  # messages in SPAM_WINDOW
@@ -472,6 +475,18 @@ def format_relative_duration(from_dt):
     if minutes or not parts:
         parts.append(f"{minutes}m")
     return " ".join(parts[:3])
+
+
+def parse_short_duration(duration_text):
+    duration_map = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    try:
+        amount = int(duration_text[:-1])
+        unit = duration_text[-1].lower()
+        if amount <= 0 or unit not in duration_map:
+            return None
+        return amount * duration_map[unit]
+    except (ValueError, IndexError):
+        return None
 
 def set_join_channel(guild_id, channel_id):
     """Set join message channel"""
@@ -1045,6 +1060,115 @@ def build_bot_info_embed():
     )
     embed.set_footer(text="Powered by whAlien")
     return embed
+
+
+def build_giveaway_embed(prize, winners, duration_text, end_time, winner_text=None, ended=False):
+    embed = discord.Embed(
+        title="🎁 Giveaway",
+        color=discord.Color.from_str("#2b2d31"),
+        description=(
+            f"Prize: {prize}\n"
+            f"Winners: {winners}\n"
+            f"Ends in: {duration_text}"
+        ),
+    )
+    if ended:
+        embed.description += f"\n\nWinner: {winner_text}"
+    else:
+        embed.description += f"\n\nEnds: {discord.utils.format_dt(end_time, style='R')}"
+    embed.set_footer(text="React with 🎉 to enter")
+    return embed
+
+
+def get_latest_giveaway(channel_id, active_only=False):
+    channel_giveaways = [
+        giveaway for giveaway in giveaways.values()
+        if giveaway["channel_id"] == channel_id and (not active_only or not giveaway["ended"])
+    ]
+    if not channel_giveaways:
+        return None
+    return max(channel_giveaways, key=lambda giveaway: giveaway["message_id"])
+
+
+async def resolve_giveaway_message(giveaway):
+    channel = bot.get_channel(giveaway["channel_id"])
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(giveaway["channel_id"])
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return None
+
+    try:
+        return await channel.fetch_message(giveaway["message_id"])
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        return None
+
+
+async def pick_giveaway_winners(giveaway):
+    message = await resolve_giveaway_message(giveaway)
+    if message is None:
+        return None, []
+
+    reaction = discord.utils.get(message.reactions, emoji="🎉")
+    if reaction is None:
+        return message, []
+
+    participants = []
+    async for user in reaction.users():
+        if user.bot:
+            continue
+        participants.append(user)
+
+    unique_participants = list({user.id: user for user in participants}.values())
+    if not unique_participants:
+        return message, []
+
+    winner_count = min(giveaway["winners"], len(unique_participants))
+    return message, random.sample(unique_participants, winner_count)
+
+
+async def finalize_giveaway(message_id, reroll=False):
+    giveaway = giveaways.get(message_id)
+    if giveaway is None:
+        return False
+
+    if giveaway["ended"] and not reroll:
+        return False
+
+    message, winners = await pick_giveaway_winners(giveaway)
+    if message is None:
+        giveaway["ended"] = True
+        giveaway["task"] = None
+        return False
+
+    winner_text = ", ".join(winner.mention for winner in winners) if winners else "No valid participants"
+    giveaway["ended"] = True
+    giveaway["task"] = None
+
+    try:
+        await message.edit(
+            embed=build_giveaway_embed(
+                giveaway["prize"],
+                giveaway["winners"],
+                giveaway.get("duration_text", "Ended"),
+                giveaway["end_time"],
+                winner_text=winner_text,
+                ended=True,
+            )
+        )
+        await message.reply(
+            f"Winner: {winner_text}" if winners else "Winner: No valid participants",
+            mention_author=False,
+        )
+    except discord.HTTPException:
+        return False
+
+    return True
+
+
+async def giveaway_timer(message_id, duration_seconds):
+    await asyncio.sleep(duration_seconds)
+    await finalize_giveaway(message_id)
 
 
 class AFKConfirmView(discord.ui.View):
@@ -1754,6 +1878,79 @@ async def deleteprefix_command(ctx):
         description=f"Prefix reset to `{DEFAULT_PREFIX}`",
         color=discord.Color.orange()
     ))
+
+
+@bot.command(name="gstart")
+@commands.has_permissions(manage_guild=True)
+async def gstart_command(ctx, duration: str, winners: int, *, prize: str):
+    """Start a giveaway"""
+    if winners <= 0:
+        await ctx.send("Winners must be at least 1.")
+        return
+
+    duration_seconds = parse_short_duration(duration)
+    if duration_seconds is None:
+        await ctx.send("Use a valid duration like `10m`, `1h`, or `30s`.")
+        return
+
+    end_time = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+    embed = build_giveaway_embed(prize, winners, duration, end_time)
+    giveaway_message = await ctx.send(embed=embed)
+
+    try:
+        await giveaway_message.add_reaction("🎉")
+    except discord.HTTPException:
+        await ctx.send("I could not add the giveaway reaction.")
+        return
+
+    giveaway_task = asyncio.create_task(giveaway_timer(giveaway_message.id, duration_seconds))
+    giveaways[giveaway_message.id] = {
+        "message_id": giveaway_message.id,
+        "channel_id": ctx.channel.id,
+        "guild_id": ctx.guild.id if ctx.guild else None,
+        "end_time": end_time,
+        "winners": winners,
+        "prize": prize,
+        "duration_text": duration,
+        "ended": False,
+        "task": giveaway_task,
+    }
+
+
+@bot.command(name="gend")
+@commands.has_permissions(manage_guild=True)
+async def gend_command(ctx):
+    """End an active giveaway early"""
+    giveaway = get_latest_giveaway(ctx.channel.id, active_only=True)
+    if giveaway is None:
+        await ctx.send("No active giveaway found in this channel.")
+        return
+
+    if giveaway["task"] is not None:
+        giveaway["task"].cancel()
+        giveaway["task"] = None
+
+    success = await finalize_giveaway(giveaway["message_id"])
+    if not success:
+        await ctx.send("I could not end that giveaway. The message may have been deleted.")
+
+
+@bot.command(name="greroll")
+@commands.has_permissions(manage_guild=True)
+async def greroll_command(ctx):
+    """Reroll a giveaway winner"""
+    giveaway = get_latest_giveaway(ctx.channel.id, active_only=False)
+    if giveaway is None:
+        await ctx.send("No giveaway found in this channel.")
+        return
+
+    if not giveaway["ended"]:
+        await ctx.send("That giveaway is still running. Use `.gend` first if you want to end it early.")
+        return
+
+    success = await finalize_giveaway(giveaway["message_id"], reroll=True)
+    if not success:
+        await ctx.send("I could not reroll that giveaway. The message may have been deleted.")
 
 
 # ===== MODERATION COMMANDS =====
