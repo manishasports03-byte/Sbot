@@ -418,14 +418,33 @@ async def send_bot_info(ctx):
     support_url = os.getenv("SUPPORT_URL", "https://discord.com")
     embed = discord.Embed(color=discord.Color.from_str("#2b2d31"))
     
-    embed.description = (
-        "Hey, I'm whAlien\n\n"
-        "**Server Prefix:** `. `\n"
-        "**Get Started:** Run `.commands` to discover all features\n"
-        f"**Support:** Having issues? Join our [Support Server]({support_url})\n\n"
-        "*Powered by Guddu Mistri*"
+    # Author header
+    embed.set_author(
+        name="whAlien ✨",
+        icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
     )
-
+    
+    # Structured content sections
+    embed.description = (
+        "Thanks for adding **whAlien** – The Best Quality Bot!\n\n"
+        "**Server Prefix**\n"
+        "`.`\n\n"
+        "**Help Menu**\n"
+        "`.commands`\n\n"
+        f"**Support**\n"
+        f"[Join Server]({support_url})"
+    )
+    
+    # Thumbnail on the right
+    if bot.user.display_avatar:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
+    
+    # Banner image at bottom
+    embed.set_image(url="https://cdn.discordapp.com/attachments/1316393787446263861/1496548750733217863/f45fe253-c350-4f1a-9936-799b368b86de.png")
+    
+    # Footer
+    embed.set_footer(text="Powered by Guddu Mistri • Made with love by @_anuneet1x 🤍")
+    
     await ctx.send(embed=embed, view=WhAlienInfoView())
 
 
@@ -480,14 +499,33 @@ async def send_lunexa_welcome(ctx):
     support_url = os.getenv("SUPPORT_URL", "https://discord.com")
     embed = discord.Embed(color=discord.Color.from_str("#2b2d31"))
     
-    embed.description = (
-        "Hey, I'm whAlien\n\n"
-        "**Server Prefix:** `. `\n"
-        "**Get Started:** Run `.commands` to discover all features\n"
-        f"**Support:** Having issues? Join our [Support Server]({support_url})\n\n"
-        "*Powered by Guddu Mistri*"
+    # Author header
+    embed.set_author(
+        name="whAlien ✨",
+        icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
     )
-
+    
+    # Structured content sections
+    embed.description = (
+        "Thanks for adding **whAlien** – The Best Quality Bot!\n\n"
+        "**Server Prefix**\n"
+        "`.`\n\n"
+        "**Help Menu**\n"
+        "`.commands`\n\n"
+        f"**Support**\n"
+        f"[Join Server]({support_url})"
+    )
+    
+    # Thumbnail on the right
+    if bot.user.display_avatar:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
+    
+    # Banner image at bottom
+    embed.set_image(url="https://cdn.discordapp.com/attachments/1316393787446263861/1496548750733217863/f45fe253-c350-4f1a-9936-799b368b86de.png")
+    
+    # Footer
+    embed.set_footer(text="Powered by Guddu Mistri • Made with love by @_anuneet1x 🤍")
+    
     await ctx.send(embed=embed, view=WhAlienInfoView())
 
 
