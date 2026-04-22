@@ -415,13 +415,14 @@ async def handle_role_toggle(message):
 
 
 async def send_bot_info(ctx):
-    embed = discord.Embed(color=discord.Color.dark_gray())
+    embed = discord.Embed(color=discord.Color.from_rgb(88, 101, 242))
     embed.title = "Hey, I'm whAlien"
     embed.description = (
-        "\n"
         "**Server Prefix:** `.`\n"
         "**Get Started:** Run `.commands` to discover all features\n"
-        "**Support:** Having issues ? Join our Support Server"
+        "**Support:** Having issues ? Join our Support Server\n"
+        "\n"
+        "━━━━━━━━━━━━━━━━━━━"
     )
 
     if bot.user.display_avatar:
@@ -435,17 +436,10 @@ class WhAlienInfoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-        permissions = discord.Permissions(
-            send_messages=True,
-            embed_links=True,
-            manage_nicknames=True,
-            manage_roles=True,
-        )
-        invite_url = discord.utils.oauth_url(bot.user.id, permissions=permissions)
         support_url = os.getenv("SUPPORT_URL", "https://discord.com")
 
         self.add_item(discord.ui.Button(label="Features", style=discord.ButtonStyle.blurple, url=support_url))
-        self.add_item(discord.ui.Button(label="Support Server", style=discord.ButtonStyle.link, url=support_url))
+        self.add_item(discord.ui.Button(label="Support Server", style=discord.ButtonStyle.blurple, url=support_url))
 
 
 class LunexaView(discord.ui.View):
@@ -478,13 +472,14 @@ class LunexaView(discord.ui.View):
 
 
 async def send_lunexa_welcome(ctx):
-    embed = discord.Embed(color=discord.Color.dark_gray())
+    embed = discord.Embed(color=discord.Color.from_rgb(88, 101, 242))
     embed.title = "Hey, I'm whAlien"
     embed.description = (
-        "\n"
         "**Server Prefix:** `.`\n"
         "**Get Started:** Run `.commands` to discover all features\n"
-        "**Support:** Having issues ? Join our Support Server"
+        "**Support:** Having issues ? Join our Support Server\n"
+        "\n"
+        "━━━━━━━━━━━━━━━━━━━"
     )
 
     if bot.user.display_avatar:
