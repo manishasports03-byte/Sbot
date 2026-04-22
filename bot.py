@@ -418,26 +418,13 @@ async def send_bot_info(ctx):
     support_url = os.getenv("SUPPORT_URL", "https://discord.com")
     embed = discord.Embed(color=discord.Color.from_str("#2b2d31"))
     
-    # Author header
-    embed.set_author(
-        name="whAlien ✨",
-        icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
-    )
-    
-    # Tight, compact content sections
+    # Compact text block (original wording, tight spacing)
     embed.description = (
-        "Thanks for adding **whAlien** – The Best Quality Bot!\n\n"
-        "**Server Prefix**\n"
-        "`.`\n"
-        "**Help Menu**\n"
-        "`.commands`\n"
-        "**Support**\n"
-        f"[Join Server]({support_url})"
+        "Hey, I'm whAlien\n\n"
+        "**Server Prefix:** `.`\n"
+        "**Get Started:** Run `.commands` to discover all features\n"
+        f"**Support:** Having issues? Join our [Support Server]({support_url})"
     )
-    
-    # Thumbnail on the right
-    if bot.user.display_avatar:
-        embed.set_thumbnail(url=bot.user.display_avatar.url)
     
     # Compact banner image
     embed.set_image(url="https://cdn.discordapp.com/attachments/1316393787446263861/1496552184144203826/03f31369-3151-424c-9dbf-e92640a86f86.png")
@@ -499,26 +486,13 @@ async def send_lunexa_welcome(ctx):
     support_url = os.getenv("SUPPORT_URL", "https://discord.com")
     embed = discord.Embed(color=discord.Color.from_str("#2b2d31"))
     
-    # Author header
-    embed.set_author(
-        name="whAlien ✨",
-        icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
-    )
-    
-    # Tight, compact content sections
+    # Compact text block (original wording, tight spacing)
     embed.description = (
-        "Thanks for adding **whAlien** – The Best Quality Bot!\n\n"
-        "**Server Prefix**\n"
-        "`.`\n"
-        "**Help Menu**\n"
-        "`.commands`\n"
-        "**Support**\n"
-        f"[Join Server]({support_url})"
+        "Hey, I'm whAlien\n\n"
+        "**Server Prefix:** `.`\n"
+        "**Get Started:** Run `.commands` to discover all features\n"
+        f"**Support:** Having issues? Join our [Support Server]({support_url})"
     )
-    
-    # Thumbnail on the right
-    if bot.user.display_avatar:
-        embed.set_thumbnail(url=bot.user.display_avatar.url)
     
     # Compact banner image
     embed.set_image(url="https://cdn.discordapp.com/attachments/1316393787446263861/1496552184144203826/03f31369-3151-424c-9dbf-e92640a86f86.png")
