@@ -1135,7 +1135,7 @@ class HelpView(discord.ui.View):
     )
     async def help_select(self, interaction: discord.Interaction, select: discord.ui.Select):
         """Handle help menu selection"""
-        selected = interaction.values[0]
+        selected = select.values[0]
         
         if selected == "mod":
             embed = discord.Embed(
@@ -1193,8 +1193,7 @@ class HelpView(discord.ui.View):
                 """
             )
         
-        await interaction.response.defer()
-        await interaction.edit_original_response(embed=embed)
+        await interaction.response.edit_message(embed=embed)
 
 
 @bot.command(name="help", aliases=["commands", "cmd"])
@@ -1224,7 +1223,7 @@ A powerful multipurpose bot with fast and reliable features
 ℹ️ Info
 ⚡ Features"""
     
-    embed.set_footer(text="Made with ❤️ by guddu mistri")
+    embed.set_footer(text="Made with ❤️ by @_anuneet1x ")
     
     await ctx.send(embed=embed, view=HelpView())
 
