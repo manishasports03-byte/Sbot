@@ -22,6 +22,15 @@ bot = commands.Bot(command_prefix=".", intents=intents)
 # ===== CONFIG =====
 bad_words = ["mc", "bc", "madarchod", "bhosdike", "chutiya", "idiot", "stupid"]
 
+# ===== ACTIVITY ROTATION =====
+ACTIVITY_MESSAGES = [
+    "with whAlien ✨",
+    ".commands | Help Menu",
+    "Serving users 🚀",
+    "Made by @_anuneet1x 🤍"
+]
+current_activity_index = 0
+
 # Cash tracking
 CASH_DATA_FILE = "cash_data.json"
 TRACKED_USER_ID = 760729575789166652
@@ -574,9 +583,26 @@ class AFKConfirmView(discord.ui.View):
         )
 
 
+@tasks.loop(seconds=7)
+async def rotate_activity():
+    """Rotate bot activity every 7 seconds"""
+    global current_activity_index
+    activity = discord.Activity(
+        type=discord.ActivityType.playing,
+        name=ACTIVITY_MESSAGES[current_activity_index]
+    )
+    await bot.change_presence(activity=activity)
+    current_activity_index = (current_activity_index + 1) % len(ACTIVITY_MESSAGES)
+
+
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+    
+    # Start activity rotation if not already running
+    if not rotate_activity.is_running():
+        rotate_activity.start()
+    
     try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} command(s)")
