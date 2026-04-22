@@ -420,9 +420,7 @@ async def send_bot_info(ctx):
     embed.description = (
         "**Server Prefix:** `.`\n"
         "**Get Started:** Run `.commands` to discover all features\n"
-        "**Support:** Having issues ? Join our Support Server\n"
-        "\n"
-        "━━━━━━━━━━━━━━━━━━━"
+        "**Support:** Having issues ? Join our Support Server"
     )
 
     if bot.user.display_avatar:
@@ -477,9 +475,7 @@ async def send_lunexa_welcome(ctx):
     embed.description = (
         "**Server Prefix:** `.`\n"
         "**Get Started:** Run `.commands` to discover all features\n"
-        "**Support:** Having issues ? Join our Support Server\n"
-        "\n"
-        "━━━━━━━━━━━━━━━━━━━"
+        "**Support:** Having issues ? Join our Support Server"
     )
 
     if bot.user.display_avatar:
