@@ -417,11 +417,10 @@ async def handle_role_toggle(message):
 async def send_bot_info(ctx):
     embed = discord.Embed(color=discord.Color.from_rgb(88, 101, 242))
     embed.title = "Hey, I'm whAlien"
-    embed.description = (
-        "**Server Prefix:** `.`\n"
-        "**Get Started:** Run `.commands` to discover all features\n"
-        "**Support:** Having issues ? Join our Support Server"
-    )
+    
+    embed.add_field(name="Server Prefix:", value="`.`", inline=False)
+    embed.add_field(name="Get Started:", value="Run `.commands` to discover all features", inline=False)
+    embed.add_field(name="Support:", value="Having issues ? Join our Support Server", inline=False)
 
     if bot.user.display_avatar:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
@@ -472,11 +471,10 @@ class LunexaView(discord.ui.View):
 async def send_lunexa_welcome(ctx):
     embed = discord.Embed(color=discord.Color.from_rgb(88, 101, 242))
     embed.title = "Hey, I'm whAlien"
-    embed.description = (
-        "**Server Prefix:** `.`\n"
-        "**Get Started:** Run `.commands` to discover all features\n"
-        "**Support:** Having issues ? Join our Support Server"
-    )
+    
+    embed.add_field(name="Server Prefix:", value="`.`", inline=False)
+    embed.add_field(name="Get Started:", value="Run `.commands` to discover all features", inline=False)
+    embed.add_field(name="Support:", value="Having issues ? Join our Support Server", inline=False)
 
     if bot.user.display_avatar:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
