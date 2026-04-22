@@ -415,23 +415,20 @@ async def handle_role_toggle(message):
 
 
 async def send_bot_info(ctx):
-    embed = discord.Embed(color=discord.Color.from_rgb(88, 101, 242))
+    embed = discord.Embed(color=discord.Color.from_str("#2b2d31"))
     embed.title = "Hey, I'm whAlien"
     
     embed.description = (
-        "Hey, I'm whAlien\n\n"
-        "────────────────────────────\n\n"
-        "**Server Prefix:** `. `\n\n"
+        "**Server Prefix:** `.`\n"
         "**Get Started:** Run `.commands` to discover all features\n"
         "**Support:** Having issues? Join our Support Server\n\n"
-        "────────────────────────────\n\n"
-        "*Powered by guddu mistri*"
+        "────────────────────────────"
     )
 
     if bot.user.display_avatar:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
 
-    embed.set_footer(text="SBot v1.0 | Moderation & Utilities")
+    embed.set_footer(text="Powered by Guddu Mistri")
     await ctx.send(embed=embed, view=WhAlienInfoView())
 
 
@@ -444,14 +441,12 @@ class WhAlienInfoView(discord.ui.View):
         self.add_item(discord.ui.Button(
             label="Features", 
             style=discord.ButtonStyle.link, 
-            url=support_url,
-            emoji="✨"
+            url=support_url
         ))
         self.add_item(discord.ui.Button(
             label="Support Server", 
             style=discord.ButtonStyle.link, 
-            url=support_url,
-            emoji="🤝"
+            url=support_url
         ))
 
 
@@ -485,23 +480,20 @@ class LunexaView(discord.ui.View):
 
 
 async def send_lunexa_welcome(ctx):
-    embed = discord.Embed(color=discord.Color.from_rgb(88, 101, 242))
+    embed = discord.Embed(color=discord.Color.from_str("#2b2d31"))
     embed.title = "Hey, I'm whAlien"
     
     embed.description = (
-        "Hey, I'm whAlien\n\n"
-        "────────────────────────────\n\n"
-        "**Server Prefix:** `. `\n\n"
+        "**Server Prefix:** `.`\n"
         "**Get Started:** Run `.commands` to discover all features\n"
         "**Support:** Having issues? Join our Support Server\n\n"
-        "────────────────────────────\n\n"
-        "*Powered by guddu mistri*"
+        "────────────────────────────"
     )
 
     if bot.user.display_avatar:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
 
-    embed.set_footer(text="SBot v1.0 | Moderation & Utilities")
+    embed.set_footer(text="Powered by Guddu Mistri")
     await ctx.send(embed=embed, view=WhAlienInfoView())
 
 
