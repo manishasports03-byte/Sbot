@@ -424,6 +424,9 @@ async def send_bot_info(ctx):
         icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
     )
     
+    # Thumbnail (box-style profile image on right)
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user.display_avatar else None)
+    
     # Compact text block (original wording, tight spacing)
     embed.description = (
         "Hey, I'm whAlien\n\n"
@@ -497,6 +500,9 @@ async def send_lunexa_welcome(ctx):
         name="whAlien ✨",
         icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
     )
+    
+    # Thumbnail (box-style profile image on right)
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user.display_avatar else None)
     
     # Compact text block (original wording, tight spacing)
     embed.description = (
