@@ -2,6 +2,7 @@ import os
 import random
 import json
 import re
+import sqlite3
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 import asyncio
@@ -23,13 +24,9 @@ bot = commands.Bot(command_prefix=".", intents=intents, help_command=None)
 bad_words = ["mc", "bc", "madarchod", "bhosdike", "chutiya", "idiot", "stupid"]
 
 # ===== INVITE TRACKING CONFIG =====
-INVITE_DATA_FILE = "invite_data.json"
-INVITE_CHANNELS_FILE = "invite_channels.json"
+INVITE_DB_FILE = "invites.db"
+db_connection = None
 server_invites = {}  # {guild_id: {invite_code: invite_object}}
-invite_stats = {}  # {guild_id: {user_id: count}}
-inviter_map = {}  # {guild_id: {user_id: inviter_id}}
-join_channels = {}  # {guild_id: channel_id}
-leave_channels = {}  # {guild_id: channel_id}
 
 # ===== ACTIVITY ROTATION =====
 ACTIVITY_MESSAGES = [
@@ -83,31 +80,172 @@ def save_cash_data(data):
     with open(CASH_DATA_FILE, 'w') as f:
         json.dump(data, f, indent=2)
 
-def load_invite_data():
-    """Load invite stats from file"""
+def init_invite_database():
+    """Initialize SQLite database for invite tracking"""
+    global db_connection
     try:
-        with open(INVITE_DATA_FILE, 'r') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+        db_connection = sqlite3.connect(INVITE_DB_FILE)
+        cursor = db_connection.cursor()
+        
+        # Create invite_stats table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS invite_stats (
+                guild_id INTEGER,
+                user_id INTEGER,
+                invites INTEGER DEFAULT 0,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        """)
+        
+        # Create inviter_map table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS inviter_map (
+                guild_id INTEGER,
+                user_id INTEGER,
+                inviter_id INTEGER,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        """)
+        
+        # Create invite_channels table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS invite_channels (
+                guild_id INTEGER PRIMARY KEY,
+                join_channel INTEGER,
+                leave_channel INTEGER
+            )
+        """)
+        
+        db_connection.commit()
+        print("✅ Database initialized successfully")
+    except sqlite3.Error as e:
+        print(f"❌ Database error: {e}")
 
-def save_invite_data(data):
-    """Save invite stats to file"""
-    with open(INVITE_DATA_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
-
-def load_invite_channels():
-    """Load join/leave channel configuration"""
+def get_invites(guild_id, user_id):
+    """Get invite count for a user"""
     try:
-        with open(INVITE_CHANNELS_FILE, 'r') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+        cursor = db_connection.cursor()
+        cursor.execute("SELECT invites FROM invite_stats WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
+        result = cursor.fetchone()
+        return result[0] if result else 0
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return 0
 
-def save_invite_channels(data):
-    """Save join/leave channel configuration"""
-    with open(INVITE_CHANNELS_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
+def add_invites(guild_id, user_id, amount):
+    """Add invites to a user"""
+    try:
+        cursor = db_connection.cursor()
+        current = get_invites(guild_id, user_id)
+        new_total = max(0, current + amount)
+        cursor.execute(
+            "INSERT OR REPLACE INTO invite_stats (guild_id, user_id, invites) VALUES (?, ?, ?)",
+            (guild_id, user_id, new_total)
+        )
+        db_connection.commit()
+        return new_total
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return current
+
+def set_inviter(guild_id, user_id, inviter_id):
+    """Set who invited a user"""
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO inviter_map (guild_id, user_id, inviter_id) VALUES (?, ?, ?)",
+            (guild_id, user_id, inviter_id)
+        )
+        db_connection.commit()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+def get_inviter(guild_id, user_id):
+    """Get who invited a user"""
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute("SELECT inviter_id FROM inviter_map WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
+        result = cursor.fetchone()
+        return result[0] if result else None
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return None
+
+def get_invited_users(guild_id, inviter_id):
+    """Get list of users invited by someone"""
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute("SELECT user_id FROM inviter_map WHERE guild_id = ? AND inviter_id = ?", (guild_id, inviter_id))
+        return [row[0] for row in cursor.fetchall()]
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return []
+
+def get_leaderboard(guild_id, limit=10):
+    """Get top inviters for a guild"""
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "SELECT user_id, invites FROM invite_stats WHERE guild_id = ? ORDER BY invites DESC LIMIT ?",
+            (guild_id, limit)
+        )
+        return cursor.fetchall()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return []
+
+def set_join_channel(guild_id, channel_id):
+    """Set join message channel"""
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO invite_channels (guild_id, join_channel) VALUES ((SELECT guild_id FROM invite_channels WHERE guild_id = ?), ?) OR INSERT INTO invite_channels (guild_id, join_channel) VALUES (?, ?)",
+            (guild_id, channel_id, guild_id, channel_id)
+        )
+        # Simpler approach
+        cursor.execute("SELECT * FROM invite_channels WHERE guild_id = ?", (guild_id,))
+        if cursor.fetchone():
+            cursor.execute("UPDATE invite_channels SET join_channel = ? WHERE guild_id = ?", (channel_id, guild_id))
+        else:
+            cursor.execute("INSERT INTO invite_channels (guild_id, join_channel) VALUES (?, ?)", (guild_id, channel_id))
+        db_connection.commit()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+def set_leave_channel(guild_id, channel_id):
+    """Set leave message channel"""
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute("SELECT * FROM invite_channels WHERE guild_id = ?", (guild_id,))
+        if cursor.fetchone():
+            cursor.execute("UPDATE invite_channels SET leave_channel = ? WHERE guild_id = ?", (channel_id, guild_id))
+        else:
+            cursor.execute("INSERT INTO invite_channels (guild_id, leave_channel) VALUES (?, ?)", (guild_id, channel_id))
+        db_connection.commit()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+def get_join_channel(guild_id):
+    """Get join message channel"""
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute("SELECT join_channel FROM invite_channels WHERE guild_id = ?", (guild_id,))
+        result = cursor.fetchone()
+        return result[0] if result else None
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return None
+
+def get_leave_channel(guild_id):
+    """Get leave message channel"""
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute("SELECT leave_channel FROM invite_channels WHERE guild_id = ?", (guild_id,))
+        result = cursor.fetchone()
+        return result[0] if result else None
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return None
 
 def extract_cash_amount(text):
     """Extract cash amount from text (e.g., '100,000' or '100000')"""
@@ -140,26 +278,6 @@ async def cache_server_invites(guild):
         print(f"✅ Cached {len(invites)} invites for {guild.name}")
     except discord.Forbidden:
         print(f"⚠️ No permission to view invites in {guild.name}")
-
-def _save_all_invite_data():
-    """Helper to save all invite data to files"""
-    # Save stats and inviters
-    data_to_save = {}
-    for guild_id, stats in invite_stats.items():
-        data_to_save[str(guild_id)] = {
-            "stats": {str(k): v for k, v in stats.items()},
-            "inviters": {str(k): v for k, v in inviter_map.get(guild_id, {}).items()}
-        }
-    save_invite_data(data_to_save)
-    
-    # Save channels
-    channels_to_save = {}
-    for guild_id, join_ch in join_channels.items():
-        channels_to_save[str(guild_id)] = {
-            "join": join_ch,
-            "leave": leave_channels.get(guild_id)
-        }
-    save_invite_channels(channels_to_save)
 
 def is_raid_happening(guild_id):
     """Check if raid is in progress"""
@@ -663,23 +781,8 @@ async def rotate_activity():
 async def on_ready():
     print(f"Logged in as {bot.user}")
     
-    # Load invite data
-    global invite_stats, inviter_map, join_channels, leave_channels
-    invite_data = load_invite_data()
-    invite_channels_data = load_invite_channels()
-    
-    # Reconstruct invite_stats and inviter_map from loaded data
-    for guild_id_str, data in invite_data.items():
-        guild_id = int(guild_id_str)
-        if isinstance(data, dict) and "stats" in data:
-            invite_stats[guild_id] = {int(k): v for k, v in data["stats"].items()}
-            inviter_map[guild_id] = {int(k): v for k, v in data["inviters"].items()}
-    
-    for guild_id_str, channels in invite_channels_data.items():
-        guild_id = int(guild_id_str)
-        if isinstance(channels, dict):
-            join_channels[guild_id] = channels.get("join")
-            leave_channels[guild_id] = channels.get("leave")
+    # Initialize database
+    init_invite_database()
     
     # Cache all server invites
     for guild in bot.guilds:
@@ -745,27 +848,25 @@ async def on_member_join(member):
         if used_invite and used_invite.inviter:
             # Update inviter stats
             inviter_id = used_invite.inviter.id
-            if inviter_id not in invite_stats[guild.id]:
-                invite_stats[guild.id][inviter_id] = 0
-            invite_stats[guild.id][inviter_id] += 1
-            inviter_map[guild.id][member.id] = inviter_id
             
-            # Save data
-            _save_all_invite_data()
+            # Update database
+            add_invites(guild.id, inviter_id, 1)
+            set_inviter(guild.id, member.id, inviter_id)
             
             # Send join message if configured
-            join_channel_id = join_channels.get(guild.id)
+            join_channel_id = get_join_channel(guild.id)
             if join_channel_id:
                 channel = guild.get_channel(join_channel_id)
                 if channel:
                     try:
+                        invites_count = get_invites(guild.id, inviter_id)
                         embed = discord.Embed(
                             title="👋 New Member Joined",
                             description=f"{member.mention} joined the server!",
                             color=discord.Color.green()
                         )
                         embed.add_field(name="Invited by", value=f"{used_invite.inviter.mention}", inline=False)
-                        embed.add_field(name="Inviter's Total Invites", value=str(invite_stats[guild.id][inviter_id]), inline=False)
+                        embed.add_field(name="Inviter's Total Invites", value=str(invites_count), inline=False)
                         embed.set_thumbnail(url=member.display_avatar.url)
                         await channel.send(embed=embed)
                     except:
@@ -1085,11 +1186,7 @@ async def invites_command(ctx, member: discord.Member = None):
     """Show number of invites of a user"""
     target = member or ctx.author
     
-    if ctx.guild.id not in invite_stats:
-        await ctx.send(f"{target.mention} has **0** invites.")
-        return
-    
-    invites_count = invite_stats[ctx.guild.id].get(target.id, 0)
+    invites_count = get_invites(ctx.guild.id, target.id)
     
     embed = discord.Embed(
         title="👤 Invite Count",
@@ -1105,11 +1202,11 @@ async def inviter_command(ctx, member: discord.Member = None):
     """Show who invited the user"""
     target = member or ctx.author
     
-    if ctx.guild.id not in inviter_map or target.id not in inviter_map[ctx.guild.id]:
+    inviter_id = get_inviter(ctx.guild.id, target.id)
+    if not inviter_id:
         await ctx.send(f"Could not find who invited {target.mention}.")
         return
     
-    inviter_id = inviter_map[ctx.guild.id][target.id]
     try:
         inviter = await bot.fetch_user(inviter_id)
         embed = discord.Embed(
@@ -1128,11 +1225,7 @@ async def invited_command(ctx, member: discord.Member = None):
     """List users invited by someone"""
     target = member or ctx.author
     
-    if ctx.guild.id not in inviter_map:
-        await ctx.send(f"{target.mention} hasn't invited anyone.")
-        return
-    
-    invited_users = [uid for uid, inviter_id in inviter_map[ctx.guild.id].items() if inviter_id == target.id]
+    invited_users = get_invited_users(ctx.guild.id, target.id)
     
     if not invited_users:
         await ctx.send(f"{target.mention} hasn't invited anyone.")
@@ -1190,8 +1283,7 @@ async def inviteinfo_command(ctx):
 @commands.has_permissions(administrator=True)
 async def setjoinchannel_command(ctx, channel: discord.TextChannel):
     """Set channel for join messages"""
-    join_channels[ctx.guild.id] = channel.id
-    _save_all_invite_data()
+    set_join_channel(ctx.guild.id, channel.id)
     
     embed = discord.Embed(
         title="✅ Join Channel Set",
@@ -1205,8 +1297,7 @@ async def setjoinchannel_command(ctx, channel: discord.TextChannel):
 @commands.has_permissions(administrator=True)
 async def setleavechannel_command(ctx, channel: discord.TextChannel):
     """Set channel for leave messages"""
-    leave_channels[ctx.guild.id] = channel.id
-    _save_all_invite_data()
+    set_leave_channel(ctx.guild.id, channel.id)
     
     embed = discord.Embed(
         title="✅ Leave Channel Set",
@@ -1224,21 +1315,14 @@ async def addinvites_command(ctx, member: discord.Member, amount: int):
         await ctx.send("Please specify a positive amount.")
         return
     
-    if ctx.guild.id not in invite_stats:
-        invite_stats[ctx.guild.id] = {}
-    
-    if member.id not in invite_stats[ctx.guild.id]:
-        invite_stats[ctx.guild.id][member.id] = 0
-    
-    invite_stats[ctx.guild.id][member.id] += amount
-    _save_all_invite_data()
+    new_total = add_invites(ctx.guild.id, member.id, amount)
     
     embed = discord.Embed(
         title="➕ Invites Added",
         description=f"Added **{amount}** invite(s) to {member.mention}",
         color=discord.Color.green()
     )
-    embed.add_field(name="New Total", value=str(invite_stats[ctx.guild.id][member.id]))
+    embed.add_field(name="New Total", value=str(new_total))
     await ctx.send(embed=embed)
 
 
@@ -1250,21 +1334,14 @@ async def removeinvites_command(ctx, member: discord.Member, amount: int):
         await ctx.send("Please specify a positive amount.")
         return
     
-    if ctx.guild.id not in invite_stats:
-        invite_stats[ctx.guild.id] = {}
-    
-    if member.id not in invite_stats[ctx.guild.id]:
-        invite_stats[ctx.guild.id][member.id] = 0
-    
-    invite_stats[ctx.guild.id][member.id] = max(0, invite_stats[ctx.guild.id][member.id] - amount)
-    _save_all_invite_data()
+    new_total = add_invites(ctx.guild.id, member.id, -amount)
     
     embed = discord.Embed(
         title="➖ Invites Removed",
         description=f"Removed **{amount}** invite(s) from {member.mention}",
         color=discord.Color.orange()
     )
-    embed.add_field(name="New Total", value=str(invite_stats[ctx.guild.id][member.id]))
+    embed.add_field(name="New Total", value=str(new_total))
     await ctx.send(embed=embed)
 
 
@@ -1275,12 +1352,11 @@ async def leaderboard_command(ctx, category: str = "invites"):
         await ctx.send("Usage: `.leaderboard invites`")
         return
     
-    if ctx.guild.id not in invite_stats or not invite_stats[ctx.guild.id]:
+    leaderboard = get_leaderboard(ctx.guild.id, limit=10)
+    
+    if not leaderboard:
         await ctx.send("No invite data available yet.")
         return
-    
-    # Sort by invites
-    sorted_stats = sorted(invite_stats[ctx.guild.id].items(), key=lambda x: x[1], reverse=True)
     
     embed = discord.Embed(
         title="🏆 Invite Leaderboard",
@@ -1288,7 +1364,7 @@ async def leaderboard_command(ctx, category: str = "invites"):
     )
     
     leaderboard_text = ""
-    for rank, (user_id, count) in enumerate(sorted_stats[:10], start=1):
+    for rank, (user_id, count) in enumerate(leaderboard, start=1):
         try:
             user = await bot.fetch_user(user_id)
             medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
@@ -1297,7 +1373,7 @@ async def leaderboard_command(ctx, category: str = "invites"):
             leaderboard_text += f"#{rank} User({user_id}) - **{count}** invite{'s' if count != 1 else ''}\n"
     
     embed.description = leaderboard_text
-    embed.set_footer(text=f"Total top inviters: {len(sorted_stats)}")
+    embed.set_footer(text=f"Total top inviters: {len(leaderboard)}")
     await ctx.send(embed=embed)
 
 
