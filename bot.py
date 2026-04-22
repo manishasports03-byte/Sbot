@@ -1118,8 +1118,122 @@ async def on_message(message):
 
 # ===== HELP & SETUP COMMANDS =====
 
+def get_main_help_embed():
+    """Get the main help menu embed"""
+    embed = discord.Embed(
+        color=discord.Color.from_str("#2b2d31")
+    )
+    
+    embed.set_author(
+        name="whAlien ✨",
+        icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
+    )
+    
+    embed.description = """Hey, I'm whAlien ✨
+A powerful multipurpose bot with fast and reliable features
+
+• **Prefix:** `.`
+• **Total Commands:** 15
+
+• **Choose a category:**
+
+🛡️ Moderation
+⚙️ Utility
+ℹ️ Info
+⚡ Features"""
+    
+    embed.set_footer(text="Made with ❤️ by @_anuneet1x ")
+    return embed
+
+
+class ModuleView(discord.ui.View):
+    """Module view with dropdown and back button"""
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.select(
+        custom_id="help-menu-module",
+        placeholder="Select Category From Here",
+        options=[
+            discord.SelectOption(label="Moderation", value="mod", emoji="🛡️"),
+            discord.SelectOption(label="Utility", value="util", emoji="⚙️"),
+            discord.SelectOption(label="Info", value="info", emoji="ℹ️"),
+            discord.SelectOption(label="Features", value="features", emoji="⚡")
+        ]
+    )
+    async def help_select_module(self, interaction: discord.Interaction, select: discord.ui.Select):
+        """Handle module selection"""
+        selected = select.values[0]
+        embed = self._get_module_embed(selected)
+        await interaction.response.edit_message(embed=embed)
+    
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="⬅️")
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Go back to main menu"""
+        main_embed = get_main_help_embed()
+        await interaction.response.edit_message(embed=main_embed, view=HelpView())
+    
+    def _get_module_embed(self, selected):
+        """Get embed for the selected module"""
+        if selected == "mod":
+            return discord.Embed(
+                title="🛡️ Moderation Commands",
+                color=discord.Color.from_str("#2b2d31"),
+                description="""
+`.warn @user [reason]` - Warn a member
+`.mute @user [duration]` - Mute a member (e.g., 10m, 1h)
+`.unmute @user` - Unmute a member
+`.kick @user [reason]` - Kick a member
+`.ban @user [reason]` - Ban a member
+`.purge [amount]` - Delete messages
+`.slowmode [seconds]` - Set channel slowmode
+                """
+            )
+        
+        elif selected == "util":
+            return discord.Embed(
+                title="⚙️ Utility Commands",
+                color=discord.Color.from_str("#2b2d31"),
+                description="""
+`.tickets` - Create support tickets
+`.modlogs [@user]` - View moderation logs
+`.afk [reason]` - Set AFK status
+`role @user Role Name` - Toggle roles
+                """
+            )
+        
+        elif selected == "info":
+            return discord.Embed(
+                title="ℹ️ Info Commands",
+                color=discord.Color.from_str("#2b2d31"),
+                description="""
+`.about` / `.info` - Bot information
+`.help` - Help menu (you are here)
+`.setup` - Server setup guide
+`.stats` - Server statistics
+                """
+            )
+        
+        elif selected == "features":
+            return discord.Embed(
+                title="⚡ Features",
+                color=discord.Color.from_str("#2b2d31"),
+                description="""
+✅ **Spam Protection** - Auto-mutes spammers
+✅ **Raid Detection** - Detects mass joins
+✅ **AFK System** - Manage AFK status
+✅ **Auto-role** - Assigns roles on join
+✅ **Bad Word Filter** - Filters profanity
+✅ **Rotating Status** - Bot status changes every 7s
+✅ **Ticket System** - Support ticket management
+✅ **Moderation Logs** - Track all mod actions
+✅ **Role Management** - Toggle roles easily
+                """
+            )
+
+
 class HelpView(discord.ui.View):
-    """Interactive help menu with dropdown"""
+    """Interactive help menu with dropdown (main view)"""
     def __init__(self):
         super().__init__(timeout=None)
     
@@ -1136,9 +1250,13 @@ class HelpView(discord.ui.View):
     async def help_select(self, interaction: discord.Interaction, select: discord.ui.Select):
         """Handle help menu selection"""
         selected = select.values[0]
-        
+        embed = self._get_module_embed(selected)
+        await interaction.response.edit_message(embed=embed, view=ModuleView())
+    
+    def _get_module_embed(self, selected):
+        """Get embed for the selected module"""
         if selected == "mod":
-            embed = discord.Embed(
+            return discord.Embed(
                 title="🛡️ Moderation Commands",
                 color=discord.Color.from_str("#2b2d31"),
                 description="""
@@ -1153,7 +1271,7 @@ class HelpView(discord.ui.View):
             )
         
         elif selected == "util":
-            embed = discord.Embed(
+            return discord.Embed(
                 title="⚙️ Utility Commands",
                 color=discord.Color.from_str("#2b2d31"),
                 description="""
@@ -1165,7 +1283,7 @@ class HelpView(discord.ui.View):
             )
         
         elif selected == "info":
-            embed = discord.Embed(
+            return discord.Embed(
                 title="ℹ️ Info Commands",
                 color=discord.Color.from_str("#2b2d31"),
                 description="""
@@ -1177,7 +1295,7 @@ class HelpView(discord.ui.View):
             )
         
         elif selected == "features":
-            embed = discord.Embed(
+            return discord.Embed(
                 title="⚡ Features",
                 color=discord.Color.from_str("#2b2d31"),
                 description="""
@@ -1192,39 +1310,12 @@ class HelpView(discord.ui.View):
 ✅ **Role Management** - Toggle roles easily
                 """
             )
-        
-        await interaction.response.edit_message(embed=embed)
 
 
 @bot.command(name="help", aliases=["commands", "cmd"])
 async def commands_command(ctx):
     """Show bot help and all available commands"""
-    embed = discord.Embed(
-        color=discord.Color.from_str("#2b2d31")
-    )
-    
-    # Author section
-    embed.set_author(
-        name="whAlien ✨",
-        icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
-    )
-    
-    # Main description
-    embed.description = """Hey, I'm whAlien ✨
-A powerful multipurpose bot with fast and reliable features
-
-• **Prefix:** `.`
-• **Total Commands:** 15
-
-• **Choose a category:**
-
-🛡️ Moderation
-⚙️ Utility
-ℹ️ Info
-⚡ Features"""
-    
-    embed.set_footer(text="Made with ❤️ by @_anuneet1x ")
-    
+    embed = get_main_help_embed()
     await ctx.send(embed=embed, view=HelpView())
 
 
