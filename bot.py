@@ -424,14 +424,14 @@ async def send_bot_info(ctx):
         icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
     )
     
-    # Structured content sections
+    # Tight, compact content sections
     embed.description = (
         "Thanks for adding **whAlien** – The Best Quality Bot!\n\n"
         "**Server Prefix**\n"
-        "`.`\n\n"
+        "`.`\n"
         "**Help Menu**\n"
-        "`.commands`\n\n"
-        f"**Support**\n"
+        "`.commands`\n"
+        "**Support**\n"
         f"[Join Server]({support_url})"
     )
     
@@ -439,8 +439,8 @@ async def send_bot_info(ctx):
     if bot.user.display_avatar:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
     
-    # Banner image at bottom
-    embed.set_image(url="https://cdn.discordapp.com/attachments/1316393787446263861/1496548750733217863/f45fe253-c350-4f1a-9936-799b368b86de.png")
+    # Compact banner image
+    embed.set_image(url="https://cdn.discordapp.com/attachments/1316393787446263861/1496552184144203826/03f31369-3151-424c-9dbf-e92640a86f86.png")
     
     # Footer
     embed.set_footer(text="Powered by Guddu Mistri • Made with love by @_anuneet1x 🤍")
@@ -505,14 +505,14 @@ async def send_lunexa_welcome(ctx):
         icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
     )
     
-    # Structured content sections
+    # Tight, compact content sections
     embed.description = (
         "Thanks for adding **whAlien** – The Best Quality Bot!\n\n"
         "**Server Prefix**\n"
-        "`.`\n\n"
+        "`.`\n"
         "**Help Menu**\n"
-        "`.commands`\n\n"
-        f"**Support**\n"
+        "`.commands`\n"
+        "**Support**\n"
         f"[Join Server]({support_url})"
     )
     
@@ -520,8 +520,8 @@ async def send_lunexa_welcome(ctx):
     if bot.user.display_avatar:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
     
-    # Banner image at bottom
-    embed.set_image(url="https://cdn.discordapp.com/attachments/1316393787446263861/1496548750733217863/f45fe253-c350-4f1a-9936-799b368b86de.png")
+    # Compact banner image
+    embed.set_image(url="https://cdn.discordapp.com/attachments/1316393787446263861/1496552184144203826/03f31369-3151-424c-9dbf-e92640a86f86.png")
     
     # Footer
     embed.set_footer(text="Powered by Guddu Mistri • Made with love by @_anuneet1x 🤍")
