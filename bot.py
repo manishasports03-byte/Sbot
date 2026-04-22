@@ -1771,15 +1771,25 @@ class ModuleView(discord.ui.View):
                 title="📨 Invite Commands",
                 color=discord.Color.from_str("#2b2d31"),
                 description="""
-`.invites [@user]` - Show number of invites
-`.inviter [@user]` - Show who invited the user
+`.invites [@user]` - Show a user's invite stats
+`.inviter [@user]` - Show who invited a user
 `.invited [@user]` - List users invited by someone
-`.inviteinfo` - Show all active invite links
-`.leaderboard invites` - Show top inviters
-`.setjoinchannel #channel` - Set join message channel *(admin)*
-`.setleavechannel #channel` - Set leave message channel *(admin)*
-`.addinvites @user amount` - Add invites to user *(admin)*
-`.removeinvites @user amount` - Remove invites from user *(admin)*
+`.inviteinfo` - Show active invite links
+`.setjoinchannel #channel` - Set the join log channel
+`.unsetwelcomechannel` - Remove the join log channel
+`.setleavechannel` - Set the leave log channel
+`.unsetleavechannel` - Remove the leave log channel
+`.setjoinmessage` - Set the join message template
+`.unsetjoinmessage` - Reset the join message template
+`.setleavemessage` - Set the leave message template
+`.unsetleavemessage` - Reset the leave message template
+`.variables` - Show available message variables
+`.testmessage` - Preview the configured message
+`.addinvites @user amount` - Add invites to a user
+`.removeinvites @user amount` - Remove invites from a user
+`.clearinvites` - Clear invite data
+`.resetmyinvites` - Reset your own invites
+`.leaderboard invites` - Show the invite leaderboard
                 """
             )
         
@@ -1870,15 +1880,25 @@ class HelpView(discord.ui.View):
                 title="📨 Invite Commands",
                 color=discord.Color.from_str("#2b2d31"),
                 description="""
-`.invites [@user]` - Show number of invites
-`.inviter [@user]` - Show who invited the user
+`.invites [@user]` - Show a user's invite stats
+`.inviter [@user]` - Show who invited a user
 `.invited [@user]` - List users invited by someone
-`.inviteinfo` - Show all active invite links
-`.leaderboard invites` - Show top inviters
-`.setjoinchannel #channel` - Set join message channel *(admin)*
-`.setleavechannel #channel` - Set leave message channel *(admin)*
-`.addinvites @user amount` - Add invites to user *(admin)*
-`.removeinvites @user amount` - Remove invites from user *(admin)*
+`.inviteinfo` - Show active invite links
+`.setjoinchannel #channel` - Set the join log channel
+`.unsetwelcomechannel` - Remove the join log channel
+`.setleavechannel` - Set the leave log channel
+`.unsetleavechannel` - Remove the leave log channel
+`.setjoinmessage` - Set the join message template
+`.unsetjoinmessage` - Reset the join message template
+`.setleavemessage` - Set the leave message template
+`.unsetleavemessage` - Reset the leave message template
+`.variables` - Show available message variables
+`.testmessage` - Preview the configured message
+`.addinvites @user amount` - Add invites to a user
+`.removeinvites @user amount` - Remove invites from a user
+`.clearinvites` - Clear invite data
+`.resetmyinvites` - Reset your own invites
+`.leaderboard invites` - Show the invite leaderboard
                 """
             )
         
