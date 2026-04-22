@@ -1118,19 +1118,30 @@ async def on_message(message):
 
 # ===== HELP & SETUP COMMANDS =====
 
-@bot.command(name="commands", aliases=["cmd"])
-async def commands_command(ctx):
-    """Show bot help and all available commands"""
-    embed = discord.Embed(
-        title="📚 SBot Commands",
-        color=discord.Color.blue(),
-        description="Here are all available commands:"
+class HelpView(discord.ui.View):
+    """Interactive help menu with dropdown"""
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.select(
+        custom_id="help-menu",
+        placeholder="Select Module From Here",
+        options=[
+            discord.SelectOption(label="Moderation", value="mod", emoji="🛡️"),
+            discord.SelectOption(label="Utility", value="util", emoji="⚙️"),
+            discord.SelectOption(label="Info", value="info", emoji="ℹ️"),
+            discord.SelectOption(label="Features", value="features", emoji="⚡")
+        ]
     )
-
-    # Moderation
-    embed.add_field(
-        name="🛡️ Moderation Commands",
-        value="""
+    async def help_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        """Handle help menu selection"""
+        selected = interaction.values[0]
+        
+        if selected == "mod":
+            embed = discord.Embed(
+                title="🛡️ Moderation Commands",
+                color=discord.Color.from_str("#2b2d31"),
+                description="""
 `.warn @user [reason]` - Warn a member
 `.mute @user [duration]` - Mute a member (e.g., 10m, 1h)
 `.unmute @user` - Unmute a member
@@ -1138,47 +1149,88 @@ async def commands_command(ctx):
 `.ban @user [reason]` - Ban a member
 `.purge [amount]` - Delete messages
 `.slowmode [seconds]` - Set channel slowmode
-        """,
-        inline=False
-    )
-
-    # Tickets & Utilities
-    embed.add_field(
-        name="🎫 Tickets & Utilities",
-        value="""
-`.tickets` - Show ticket creation panel
+                """
+            )
+        
+        elif selected == "util":
+            embed = discord.Embed(
+                title="⚙️ Utility Commands",
+                color=discord.Color.from_str("#2b2d31"),
+                description="""
+`.tickets` - Create support tickets
 `.modlogs [@user]` - View moderation logs
-`.afk [reason]` - Go AFK
-`.role @user Role Name` - Toggle role
-        """,
-        inline=False
-    )
+`.afk [reason]` - Set AFK status
+`role @user Role Name` - Toggle roles
+                """
+            )
+        
+        elif selected == "info":
+            embed = discord.Embed(
+                title="ℹ️ Info Commands",
+                color=discord.Color.from_str("#2b2d31"),
+                description="""
+`.about` / `.info` - Bot information
+`.help` - Help menu (you are here)
+`.setup` - Server setup guide
+`.stats` - Server statistics
+                """
+            )
+        
+        elif selected == "features":
+            embed = discord.Embed(
+                title="⚡ Features",
+                color=discord.Color.from_str("#2b2d31"),
+                description="""
+✅ **Spam Protection** - Auto-mutes spammers
+✅ **Raid Detection** - Detects mass joins
+✅ **AFK System** - Manage AFK status
+✅ **Auto-role** - Assigns roles on join
+✅ **Bad Word Filter** - Filters profanity
+✅ **Rotating Status** - Bot status changes every 7s
+✅ **Ticket System** - Support ticket management
+✅ **Moderation Logs** - Track all mod actions
+✅ **Role Management** - Toggle roles easily
+                """
+            )
+        
+        await interaction.response.defer()
+        await interaction.edit_original_response(embed=embed)
 
-    # Info
-    embed.add_field(
-        name="ℹ️ Info Commands",
-        value="`about` or `.info` - Bot information\n`.commands` - Show all commands",
-        inline=False
-    )
 
-    embed.add_field(
-        name="🔧 Features",
-        value="""
-✅ AFK System
-✅ Role Management  
-✅ Moderation Tools
-✅ Ticket System
-✅ Temporary Voice Channels
-✅ Spam Protection
-✅ Raid Detection
-✅ Moderation Logs
-✅ Auto-mute on warnings
-        """,
-        inline=False
+@bot.command(name="help", aliases=["commands", "cmd"])
+async def commands_command(ctx):
+    """Show bot help and all available commands"""
+    embed = discord.Embed(
+        color=discord.Color.from_str("#2b2d31")
     )
+    
+    # Author section
+    embed.set_author(
+        name="whAlien ✨",
+        icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
+    )
+    
+    # Main description
+    embed.description = """Hey, I'm whAlien ✨
+A powerful multipurpose bot with fast and reliable features
 
-    embed.set_footer(text="Use .commands to see all commands | Made with ❤️ by guddu mistri | Prefix: .")
-    await ctx.send(embed=embed)
+• **Prefix:** `.`
+• **Total Commands:** 15
+
+• **Choose a module:**
+
+🛡️ Moderation
+⚙️ Utility
+ℹ️ Info
+⚡ Features"""
+    
+    embed.set_footer(text="Made with ❤️ by guddu mistri")
+    
+    await ctx.send(embed=embed, view=HelpView())
+
+
+@bot.command(name="setup")
+@commands.has_permissions(administrator=True)
 
 
 @bot.command(name="setup")
