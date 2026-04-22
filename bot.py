@@ -27,6 +27,8 @@ bad_words = ["mc", "bc", "madarchod", "bhosdike", "chutiya", "idiot", "stupid"]
 INVITE_DB_FILE = "invites.db"
 db_connection = None
 server_invites = {}  # {guild_id: {invite_code: invite_object}}
+INVITE_UI_COLOR = discord.Color.from_str("#2b2d31")
+INVITED_PAGE_SIZE = 5
 
 # ===== ACTIVITY ROTATION =====
 ACTIVITY_MESSAGES = [
@@ -765,6 +767,128 @@ class AFKConfirmView(discord.ui.View):
         )
 
 
+def format_invite_request_timestamp():
+    return datetime.now().strftime("%d %b %Y %I:%M %p")
+
+
+def get_invite_ui_stats(guild_id, user_id):
+    invites_count = get_invites(guild_id, user_id)
+    return {
+        "invites": invites_count,
+        "joins": invites_count,
+        "leaves": 0,
+        "fake": 0,
+        "rejoins": 0,
+    }
+
+
+def build_invites_embed(ctx, target):
+    stats = get_invite_ui_stats(ctx.guild.id, target.id)
+    embed = discord.Embed(
+        title="Invite log",
+        color=INVITE_UI_COLOR,
+        description=(
+            f"> {target.display_name} has **{stats['invites']}** invites\n\n"
+            f"Joins: **{stats['joins']}**\n"
+            f"Left: **{stats['leaves']}**\n"
+            f"Fake: **{stats['fake']}**\n"
+            f"Rejoins: **{stats['rejoins']}** (7d)"
+        ),
+    )
+    embed.set_thumbnail(url=target.display_avatar.url)
+    embed.set_footer(text=f"Requested by {ctx.author} • {format_invite_request_timestamp()}")
+    return embed
+
+
+class InvitedUsersView(discord.ui.View):
+    def __init__(self, author_id, target, entries):
+        super().__init__(timeout=180)
+        self.author_id = author_id
+        self.target = target
+        self.entries = entries
+        self.page = 0
+        self.message = None
+        self._sync_buttons()
+
+    @property
+    def total_pages(self):
+        return max(1, (len(self.entries) + INVITED_PAGE_SIZE - 1) // INVITED_PAGE_SIZE)
+
+    def _sync_buttons(self, stopped=False):
+        is_first_page = self.page == 0
+        is_last_page = self.page >= self.total_pages - 1
+
+        self.first_page.disabled = stopped or is_first_page
+        self.previous_page.disabled = stopped or is_first_page
+        self.stop_pages.disabled = stopped
+        self.next_page.disabled = stopped or is_last_page
+        self.last_page.disabled = stopped or is_last_page
+
+    def build_embed(self):
+        start = self.page * INVITED_PAGE_SIZE
+        end = start + INVITED_PAGE_SIZE
+        page_entries = self.entries[start:end]
+
+        embed = discord.Embed(
+            title="Invited users",
+            description="\n".join(
+                f"#{index} • {entry}"
+                for index, entry in enumerate(page_entries, start=start + 1)
+            ),
+            color=INVITE_UI_COLOR,
+        )
+        embed.set_thumbnail(url=self.target.display_avatar.url)
+        embed.set_footer(text=f"Page {self.page + 1}/{self.total_pages}")
+        return embed
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "Only the command author can use these buttons.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def on_timeout(self):
+        self._sync_buttons(stopped=True)
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(emoji="⏮", style=discord.ButtonStyle.secondary)
+    async def first_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = 0
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(emoji="⏪", style=discord.ButtonStyle.secondary)
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = max(0, self.page - 1)
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(emoji="⏹", style=discord.ButtonStyle.danger)
+    async def stop_pages(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self._sync_buttons(stopped=True)
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+    @discord.ui.button(emoji="⏩", style=discord.ButtonStyle.secondary)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = min(self.total_pages - 1, self.page + 1)
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(emoji="⏭", style=discord.ButtonStyle.secondary)
+    async def last_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = self.total_pages - 1
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+
 @tasks.loop(seconds=7)
 async def rotate_activity():
     """Rotate bot activity every 7 seconds"""
@@ -1185,16 +1309,8 @@ async def modlogs_command(ctx, member: discord.Member = None):
 async def invites_command(ctx, member: discord.Member = None):
     """Show number of invites of a user"""
     target = member or ctx.author
-    
-    invites_count = get_invites(ctx.guild.id, target.id)
-    
-    embed = discord.Embed(
-        title="👤 Invite Count",
-        color=discord.Color.blurple()
-    )
-    embed.description = f"{target.mention} has **{invites_count}** invites"
-    embed.set_thumbnail(url=target.display_avatar.url)
-    await ctx.send(embed=embed)
+
+    await ctx.send(embed=build_invites_embed(ctx, target))
 
 
 @bot.command(name="inviter")
@@ -1224,29 +1340,24 @@ async def inviter_command(ctx, member: discord.Member = None):
 async def invited_command(ctx, member: discord.Member = None):
     """List users invited by someone"""
     target = member or ctx.author
-    
+
     invited_users = get_invited_users(ctx.guild.id, target.id)
-    
+
     if not invited_users:
         await ctx.send(f"{target.mention} hasn't invited anyone.")
         return
-    
-    embed = discord.Embed(
-        title="👥 Invited Users",
-        description=f"Users invited by {target.mention}",
-        color=discord.Color.blurple()
-    )
-    
-    user_mentions = []
-    for uid in invited_users[:20]:  # Limit to 20 to avoid too long embed
+
+    entries = []
+    for uid in invited_users:
         try:
-            user = await bot.fetch_user(uid)
-            user_mentions.append(user.mention)
-        except:
-            user_mentions.append(f"User({uid})")
-    
-    embed.add_field(name=f"Invitees ({len(invited_users)})", value="\n".join(user_mentions), inline=False)
-    await ctx.send(embed=embed)
+            user = ctx.guild.get_member(uid) or await bot.fetch_user(uid)
+            entries.append(user.mention)
+        except Exception:
+            entries.append(f"User({uid})")
+
+    view = InvitedUsersView(ctx.author.id, target, entries)
+    message = await ctx.send(embed=view.build_embed(), view=view)
+    view.message = message
 
 
 @bot.command(name="inviteinfo")
