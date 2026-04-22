@@ -436,7 +436,7 @@ async def send_bot_info(ctx):
     )
     
     # Compact banner image
-    embed.set_image(url="https://cdn.discordapp.com/attachments/1316393787446263861/1496552184144203826/03f31369-3151-424c-9dbf-e92640a86f86.png")
+    embed.set_image(url="https://cdn.discordapp.com/attachments/1379052516863381638/1496561395964317746/f45fe253-c350-4f1a-9936-799b368b86de.png")
     
     # Footer
     embed.set_footer(text="Powered by Guddu Mistri • Made with love by @_anuneet1x 🤍")
@@ -513,7 +513,7 @@ async def send_lunexa_welcome(ctx):
     )
     
     # Compact banner image
-    embed.set_image(url="https://cdn.discordapp.com/attachments/1316393787446263861/1496552184144203826/03f31369-3151-424c-9dbf-e92640a86f86.png")
+    embed.set_image(url="https://cdn.discordapp.com/attachments/1379052516863381638/1496561395964317746/f45fe253-c350-4f1a-9936-799b368b86de.png")
     
     # Footer
     embed.set_footer(text="Powered by Guddu Mistri • Made with love by @_anuneet1x 🤍")
