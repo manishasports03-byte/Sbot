@@ -2787,6 +2787,9 @@ class ModuleView(discord.ui.View):
 `.ping` - Show bot latency
 `.setprefix [new prefix]` - Change bot prefix
 `.deleteprefix` - Reset prefix
+`.gstart duration winners prize` - Start a giveaway
+`.gend` - End the latest giveaway early
+`.greroll` - Reroll the latest giveaway
                 """
             )
         
@@ -2934,6 +2937,9 @@ class HelpView(discord.ui.View):
 `.ping` - Show bot latency
 `.setprefix [new prefix]` - Change bot prefix
 `.deleteprefix` - Reset prefix
+`.gstart duration winners prize` - Start a giveaway
+`.gend` - End the latest giveaway early
+`.greroll` - Reroll the latest giveaway
                 """
             )
         
