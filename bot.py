@@ -22,6 +22,15 @@ bot = commands.Bot(command_prefix=".", intents=intents, help_command=None)
 # ===== CONFIG =====
 bad_words = ["mc", "bc", "madarchod", "bhosdike", "chutiya", "idiot", "stupid"]
 
+# ===== INVITE TRACKING CONFIG =====
+INVITE_DATA_FILE = "invite_data.json"
+INVITE_CHANNELS_FILE = "invite_channels.json"
+server_invites = {}  # {guild_id: {invite_code: invite_object}}
+invite_stats = {}  # {guild_id: {user_id: count}}
+inviter_map = {}  # {guild_id: {user_id: inviter_id}}
+join_channels = {}  # {guild_id: channel_id}
+leave_channels = {}  # {guild_id: channel_id}
+
 # ===== ACTIVITY ROTATION =====
 ACTIVITY_MESSAGES = [
     "with whAlien ✨",
@@ -74,6 +83,32 @@ def save_cash_data(data):
     with open(CASH_DATA_FILE, 'w') as f:
         json.dump(data, f, indent=2)
 
+def load_invite_data():
+    """Load invite stats from file"""
+    try:
+        with open(INVITE_DATA_FILE, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_invite_data(data):
+    """Save invite stats to file"""
+    with open(INVITE_DATA_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
+
+def load_invite_channels():
+    """Load join/leave channel configuration"""
+    try:
+        with open(INVITE_CHANNELS_FILE, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_invite_channels(data):
+    """Save join/leave channel configuration"""
+    with open(INVITE_CHANNELS_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
+
 def extract_cash_amount(text):
     """Extract cash amount from text (e.g., '100,000' or '100000')"""
     # Look for currency patterns like: $1,234 or 1,234 or just numbers
@@ -96,6 +131,35 @@ def log_moderation_action(guild_id, action, moderator, target, reason=""):
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
     moderation_logs[guild_id].append(entry)
+
+async def cache_server_invites(guild):
+    """Cache all invites for a server"""
+    try:
+        invites = await guild.invites()
+        server_invites[guild.id] = {invite.code: invite for invite in invites}
+        print(f"✅ Cached {len(invites)} invites for {guild.name}")
+    except discord.Forbidden:
+        print(f"⚠️ No permission to view invites in {guild.name}")
+
+def _save_all_invite_data():
+    """Helper to save all invite data to files"""
+    # Save stats and inviters
+    data_to_save = {}
+    for guild_id, stats in invite_stats.items():
+        data_to_save[str(guild_id)] = {
+            "stats": {str(k): v for k, v in stats.items()},
+            "inviters": {str(k): v for k, v in inviter_map.get(guild_id, {}).items()}
+        }
+    save_invite_data(data_to_save)
+    
+    # Save channels
+    channels_to_save = {}
+    for guild_id, join_ch in join_channels.items():
+        channels_to_save[str(guild_id)] = {
+            "join": join_ch,
+            "leave": leave_channels.get(guild_id)
+        }
+    save_invite_channels(channels_to_save)
 
 def is_raid_happening(guild_id):
     """Check if raid is in progress"""
@@ -599,6 +663,28 @@ async def rotate_activity():
 async def on_ready():
     print(f"Logged in as {bot.user}")
     
+    # Load invite data
+    global invite_stats, inviter_map, join_channels, leave_channels
+    invite_data = load_invite_data()
+    invite_channels_data = load_invite_channels()
+    
+    # Reconstruct invite_stats and inviter_map from loaded data
+    for guild_id_str, data in invite_data.items():
+        guild_id = int(guild_id_str)
+        if isinstance(data, dict) and "stats" in data:
+            invite_stats[guild_id] = {int(k): v for k, v in data["stats"].items()}
+            inviter_map[guild_id] = {int(k): v for k, v in data["inviters"].items()}
+    
+    for guild_id_str, channels in invite_channels_data.items():
+        guild_id = int(guild_id_str)
+        if isinstance(channels, dict):
+            join_channels[guild_id] = channels.get("join")
+            leave_channels[guild_id] = channels.get("leave")
+    
+    # Cache all server invites
+    for guild in bot.guilds:
+        await cache_server_invites(guild)
+    
     # Start activity rotation if not already running
     if not rotate_activity.is_running():
         rotate_activity.start()
@@ -613,7 +699,7 @@ async def on_ready():
 # ===== MEMBER JOIN EVENT - Anti-Raid & Auto-Role =====
 @bot.event
 async def on_member_join(member):
-    """Handle member join - check for raids and assign auto-roles"""
+    """Handle member join - check for raids, assign auto-roles, and track invites"""
     guild = member.guild
 
     # ===== RAID DETECTION =====
@@ -634,6 +720,60 @@ async def on_member_join(member):
                 print(f"🛡️ Banned {member} for raid protection")
             except:
                 pass
+
+    # ===== INVITE TRACKING =====
+    try:
+        # Get current invites
+        current_invites = await guild.invites()
+        old_invites = server_invites.get(guild.id, {})
+        
+        # Find which invite was used
+        used_invite = None
+        for invite in current_invites:
+            if invite.code not in old_invites or old_invites[invite.code].uses < invite.uses:
+                used_invite = invite
+                break
+        
+        # Update cached invites
+        server_invites[guild.id] = {invite.code: invite for invite in current_invites}
+        
+        # Track the invite
+        if guild.id not in invite_stats:
+            invite_stats[guild.id] = {}
+            inviter_map[guild.id] = {}
+        
+        if used_invite and used_invite.inviter:
+            # Update inviter stats
+            inviter_id = used_invite.inviter.id
+            if inviter_id not in invite_stats[guild.id]:
+                invite_stats[guild.id][inviter_id] = 0
+            invite_stats[guild.id][inviter_id] += 1
+            inviter_map[guild.id][member.id] = inviter_id
+            
+            # Save data
+            _save_all_invite_data()
+            
+            # Send join message if configured
+            join_channel_id = join_channels.get(guild.id)
+            if join_channel_id:
+                channel = guild.get_channel(join_channel_id)
+                if channel:
+                    try:
+                        embed = discord.Embed(
+                            title="👋 New Member Joined",
+                            description=f"{member.mention} joined the server!",
+                            color=discord.Color.green()
+                        )
+                        embed.add_field(name="Invited by", value=f"{used_invite.inviter.mention}", inline=False)
+                        embed.add_field(name="Inviter's Total Invites", value=str(invite_stats[guild.id][inviter_id]), inline=False)
+                        embed.set_thumbnail(url=member.display_avatar.url)
+                        await channel.send(embed=embed)
+                    except:
+                        pass
+    except discord.Forbidden:
+        pass
+    except Exception as e:
+        print(f"Error tracking invite for {member}: {e}")
 
     # ===== AUTO-ROLES =====
     # You can configure auto-roles by editing this section
@@ -938,6 +1078,229 @@ async def modlogs_command(ctx, member: discord.Member = None):
     await ctx.send(embed=embed)
 
 
+# ===== INVITE TRACKING COMMANDS =====
+
+@bot.command(name="invites", aliases=["inv"])
+async def invites_command(ctx, member: discord.Member = None):
+    """Show number of invites of a user"""
+    target = member or ctx.author
+    
+    if ctx.guild.id not in invite_stats:
+        await ctx.send(f"{target.mention} has **0** invites.")
+        return
+    
+    invites_count = invite_stats[ctx.guild.id].get(target.id, 0)
+    
+    embed = discord.Embed(
+        title="👤 Invite Count",
+        color=discord.Color.blurple()
+    )
+    embed.description = f"{target.mention} has **{invites_count}** invites"
+    embed.set_thumbnail(url=target.display_avatar.url)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="inviter")
+async def inviter_command(ctx, member: discord.Member = None):
+    """Show who invited the user"""
+    target = member or ctx.author
+    
+    if ctx.guild.id not in inviter_map or target.id not in inviter_map[ctx.guild.id]:
+        await ctx.send(f"Could not find who invited {target.mention}.")
+        return
+    
+    inviter_id = inviter_map[ctx.guild.id][target.id]
+    try:
+        inviter = await bot.fetch_user(inviter_id)
+        embed = discord.Embed(
+            title="👤 Who Invited",
+            color=discord.Color.blurple()
+        )
+        embed.description = f"{target.mention} was invited by {inviter.mention}"
+        embed.set_thumbnail(url=target.display_avatar.url)
+        await ctx.send(embed=embed)
+    except:
+        await ctx.send(f"Could not find who invited {target.mention}.")
+
+
+@bot.command(name="invited")
+async def invited_command(ctx, member: discord.Member = None):
+    """List users invited by someone"""
+    target = member or ctx.author
+    
+    if ctx.guild.id not in inviter_map:
+        await ctx.send(f"{target.mention} hasn't invited anyone.")
+        return
+    
+    invited_users = [uid for uid, inviter_id in inviter_map[ctx.guild.id].items() if inviter_id == target.id]
+    
+    if not invited_users:
+        await ctx.send(f"{target.mention} hasn't invited anyone.")
+        return
+    
+    embed = discord.Embed(
+        title="👥 Invited Users",
+        description=f"Users invited by {target.mention}",
+        color=discord.Color.blurple()
+    )
+    
+    user_mentions = []
+    for uid in invited_users[:20]:  # Limit to 20 to avoid too long embed
+        try:
+            user = await bot.fetch_user(uid)
+            user_mentions.append(user.mention)
+        except:
+            user_mentions.append(f"User({uid})")
+    
+    embed.add_field(name=f"Invitees ({len(invited_users)})", value="\n".join(user_mentions), inline=False)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="inviteinfo")
+async def inviteinfo_command(ctx):
+    """Show all active invite links in server"""
+    try:
+        invites = await ctx.guild.invites()
+    except discord.Forbidden:
+        await ctx.send("I don't have permission to view invites.")
+        return
+    
+    if not invites:
+        await ctx.send("No active invites in this server.")
+        return
+    
+    embed = discord.Embed(
+        title="🔗 Server Invites",
+        color=discord.Color.blurple()
+    )
+    
+    for invite in invites[:10]:  # Show max 10 invites
+        creator = invite.inviter.mention if invite.inviter else "Unknown"
+        expires = "Never" if not invite.expires_at else invite.expires_at.strftime("%Y-%m-%d")
+        embed.add_field(
+            name=f"discord.gg/{invite.code}",
+            value=f"👤 {creator}\n📊 Uses: {invite.uses}\n⏰ Expires: {expires}",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="setjoinchannel")
+@commands.has_permissions(administrator=True)
+async def setjoinchannel_command(ctx, channel: discord.TextChannel):
+    """Set channel for join messages"""
+    join_channels[ctx.guild.id] = channel.id
+    _save_all_invite_data()
+    
+    embed = discord.Embed(
+        title="✅ Join Channel Set",
+        description=f"Join messages will be sent to {channel.mention}",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="setleavechannel")
+@commands.has_permissions(administrator=True)
+async def setleavechannel_command(ctx, channel: discord.TextChannel):
+    """Set channel for leave messages"""
+    leave_channels[ctx.guild.id] = channel.id
+    _save_all_invite_data()
+    
+    embed = discord.Embed(
+        title="✅ Leave Channel Set",
+        description=f"Leave messages will be sent to {channel.mention}",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="addinvites")
+@commands.has_permissions(administrator=True)
+async def addinvites_command(ctx, member: discord.Member, amount: int):
+    """Add invites to a user"""
+    if amount <= 0:
+        await ctx.send("Please specify a positive amount.")
+        return
+    
+    if ctx.guild.id not in invite_stats:
+        invite_stats[ctx.guild.id] = {}
+    
+    if member.id not in invite_stats[ctx.guild.id]:
+        invite_stats[ctx.guild.id][member.id] = 0
+    
+    invite_stats[ctx.guild.id][member.id] += amount
+    _save_all_invite_data()
+    
+    embed = discord.Embed(
+        title="➕ Invites Added",
+        description=f"Added **{amount}** invite(s) to {member.mention}",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="New Total", value=str(invite_stats[ctx.guild.id][member.id]))
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="removeinvites")
+@commands.has_permissions(administrator=True)
+async def removeinvites_command(ctx, member: discord.Member, amount: int):
+    """Remove invites from a user"""
+    if amount <= 0:
+        await ctx.send("Please specify a positive amount.")
+        return
+    
+    if ctx.guild.id not in invite_stats:
+        invite_stats[ctx.guild.id] = {}
+    
+    if member.id not in invite_stats[ctx.guild.id]:
+        invite_stats[ctx.guild.id][member.id] = 0
+    
+    invite_stats[ctx.guild.id][member.id] = max(0, invite_stats[ctx.guild.id][member.id] - amount)
+    _save_all_invite_data()
+    
+    embed = discord.Embed(
+        title="➖ Invites Removed",
+        description=f"Removed **{amount}** invite(s) from {member.mention}",
+        color=discord.Color.orange()
+    )
+    embed.add_field(name="New Total", value=str(invite_stats[ctx.guild.id][member.id]))
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="leaderboard")
+async def leaderboard_command(ctx, category: str = "invites"):
+    """Show top inviters leaderboard"""
+    if category.lower() not in ["invites", "inv"]:
+        await ctx.send("Usage: `.leaderboard invites`")
+        return
+    
+    if ctx.guild.id not in invite_stats or not invite_stats[ctx.guild.id]:
+        await ctx.send("No invite data available yet.")
+        return
+    
+    # Sort by invites
+    sorted_stats = sorted(invite_stats[ctx.guild.id].items(), key=lambda x: x[1], reverse=True)
+    
+    embed = discord.Embed(
+        title="🏆 Invite Leaderboard",
+        color=discord.Color.gold()
+    )
+    
+    leaderboard_text = ""
+    for rank, (user_id, count) in enumerate(sorted_stats[:10], start=1):
+        try:
+            user = await bot.fetch_user(user_id)
+            medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
+            leaderboard_text += f"{medal} {user.mention} - **{count}** invite{'s' if count != 1 else ''}\n"
+        except:
+            leaderboard_text += f"#{rank} User({user_id}) - **{count}** invite{'s' if count != 1 else ''}\n"
+    
+    embed.description = leaderboard_text
+    embed.set_footer(text=f"Total top inviters: {len(sorted_stats)}")
+    await ctx.send(embed=embed)
+
+
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
@@ -1133,13 +1496,14 @@ def get_main_help_embed():
 A powerful multipurpose bot with fast and reliable features
 
 • **Prefix:** `.`
-• **Total Commands:** 15
+• **Total Commands:** 25+
 
 • **Choose a category:**
 
 🛡️ Moderation
 ⚙️ Utility
 ℹ️ Info
+📨 Invites
 ⚡ Features"""
     
     embed.set_footer(text="Made with ❤️ by @_anuneet1x ")
@@ -1158,6 +1522,7 @@ class ModuleView(discord.ui.View):
             discord.SelectOption(label="Moderation", value="mod", emoji="🛡️"),
             discord.SelectOption(label="Utility", value="util", emoji="⚙️"),
             discord.SelectOption(label="Info", value="info", emoji="ℹ️"),
+            discord.SelectOption(label="Invites", value="invites", emoji="📨"),
             discord.SelectOption(label="Features", value="features", emoji="⚡")
         ]
     )
@@ -1214,6 +1579,23 @@ class ModuleView(discord.ui.View):
                 """
             )
         
+        elif selected == "invites":
+            return discord.Embed(
+                title="📨 Invite Commands",
+                color=discord.Color.from_str("#2b2d31"),
+                description="""
+`.invites [@user]` - Show number of invites
+`.inviter [@user]` - Show who invited the user
+`.invited [@user]` - List users invited by someone
+`.inviteinfo` - Show all active invite links
+`.leaderboard invites` - Show top inviters
+`.setjoinchannel #channel` - Set join message channel *(admin)*
+`.setleavechannel #channel` - Set leave message channel *(admin)*
+`.addinvites @user amount` - Add invites to user *(admin)*
+`.removeinvites @user amount` - Remove invites from user *(admin)*
+                """
+            )
+        
         elif selected == "features":
             return discord.Embed(
                 title="⚡ Features",
@@ -1228,6 +1610,7 @@ class ModuleView(discord.ui.View):
 ✅ **Ticket System** - Support ticket management
 ✅ **Moderation Logs** - Track all mod actions
 ✅ **Role Management** - Toggle roles easily
+✅ **Invite Tracking** - Track who invited whom
                 """
             )
 
@@ -1244,6 +1627,7 @@ class HelpView(discord.ui.View):
             discord.SelectOption(label="Moderation", value="mod", emoji="🛡️"),
             discord.SelectOption(label="Utility", value="util", emoji="⚙️"),
             discord.SelectOption(label="Info", value="info", emoji="ℹ️"),
+            discord.SelectOption(label="Invites", value="invites", emoji="📨"),
             discord.SelectOption(label="Features", value="features", emoji="⚡")
         ]
     )
@@ -1294,6 +1678,23 @@ class HelpView(discord.ui.View):
                 """
             )
         
+        elif selected == "invites":
+            return discord.Embed(
+                title="📨 Invite Commands",
+                color=discord.Color.from_str("#2b2d31"),
+                description="""
+`.invites [@user]` - Show number of invites
+`.inviter [@user]` - Show who invited the user
+`.invited [@user]` - List users invited by someone
+`.inviteinfo` - Show all active invite links
+`.leaderboard invites` - Show top inviters
+`.setjoinchannel #channel` - Set join message channel *(admin)*
+`.setleavechannel #channel` - Set leave message channel *(admin)*
+`.addinvites @user amount` - Add invites to user *(admin)*
+`.removeinvites @user amount` - Remove invites from user *(admin)*
+                """
+            )
+        
         elif selected == "features":
             return discord.Embed(
                 title="⚡ Features",
@@ -1308,6 +1709,7 @@ class HelpView(discord.ui.View):
 ✅ **Ticket System** - Support ticket management
 ✅ **Moderation Logs** - Track all mod actions
 ✅ **Role Management** - Toggle roles easily
+✅ **Invite Tracking** - Track who invited whom
                 """
             )
 
