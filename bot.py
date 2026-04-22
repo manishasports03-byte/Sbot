@@ -415,14 +415,14 @@ async def handle_role_toggle(message):
 
 
 async def send_bot_info(ctx):
+    support_url = os.getenv("SUPPORT_URL", "https://discord.com")
     embed = discord.Embed(color=discord.Color.from_str("#2b2d31"))
     
     embed.description = (
         "Hey, I'm whAlien\n\n"
         "**Server Prefix:** `. `\n"
         "**Get Started:** Run `.commands` to discover all features\n"
-        "**Support:** Having issues? Join our Support Server\n"
-        "────────────────────────────\n"
+        f"**Support:** Having issues? Join our [Support Server]({support_url})\n\n"
         "*Powered by Guddu Mistri*"
     )
 
@@ -477,14 +477,14 @@ class LunexaView(discord.ui.View):
 
 
 async def send_lunexa_welcome(ctx):
+    support_url = os.getenv("SUPPORT_URL", "https://discord.com")
     embed = discord.Embed(color=discord.Color.from_str("#2b2d31"))
     
     embed.description = (
         "Hey, I'm whAlien\n\n"
         "**Server Prefix:** `. `\n"
         "**Get Started:** Run `.commands` to discover all features\n"
-        "**Support:** Having issues? Join our Support Server\n"
-        "────────────────────────────\n"
+        f"**Support:** Having issues? Join our [Support Server]({support_url})\n\n"
         "*Powered by Guddu Mistri*"
     )
 
