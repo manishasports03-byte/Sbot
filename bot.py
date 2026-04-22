@@ -1125,7 +1125,7 @@ class HelpView(discord.ui.View):
     
     @discord.ui.select(
         custom_id="help-menu",
-        placeholder="Select Module From Here",
+        placeholder="Select Category From Here",
         options=[
             discord.SelectOption(label="Moderation", value="mod", emoji="🛡️"),
             discord.SelectOption(label="Utility", value="util", emoji="⚙️"),
@@ -1216,7 +1216,7 @@ A powerful multipurpose bot with fast and reliable features
 • **Prefix:** `.`
 • **Total Commands:** 15
 
-• **Choose a module:**
+• **Choose a category:**
 
 🛡️ Moderation
 ⚙️ Utility
