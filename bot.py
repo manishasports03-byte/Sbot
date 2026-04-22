@@ -419,17 +419,19 @@ async def send_bot_info(ctx):
     embed.title = "Hey, I'm whAlien"
     
     embed.description = (
-        "**Server Prefix** `.`\n"
-        "**Get Started** Run `.commands` to discover all features\n"
-        "**Support** Having issues ? Join our Support Server\n"
-        "\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        "Hey, I'm whAlien\n\n"
+        "────────────────────────────\n\n"
+        "**Server Prefix:** `. `\n\n"
+        "**Get Started:** Run `.commands` to discover all features\n"
+        "**Support:** Having issues? Join our Support Server\n\n"
+        "────────────────────────────\n\n"
+        "*Powered by guddu mistri*"
     )
 
     if bot.user.display_avatar:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
 
-    embed.set_footer(text="Powered by guddu mistri")
+    embed.set_footer(text="SBot v1.0 | Moderation & Utilities")
     await ctx.send(embed=embed, view=WhAlienInfoView())
 
 
@@ -439,8 +441,18 @@ class WhAlienInfoView(discord.ui.View):
 
         support_url = os.getenv("SUPPORT_URL", "https://discord.com")
 
-        self.add_item(discord.ui.Button(label="Features", style=discord.ButtonStyle.blurple, url=support_url))
-        self.add_item(discord.ui.Button(label="Support Server", style=discord.ButtonStyle.blurple, url=support_url))
+        self.add_item(discord.ui.Button(
+            label="Features", 
+            style=discord.ButtonStyle.link, 
+            url=support_url,
+            emoji="✨"
+        ))
+        self.add_item(discord.ui.Button(
+            label="Support Server", 
+            style=discord.ButtonStyle.link, 
+            url=support_url,
+            emoji="🤝"
+        ))
 
 
 class LunexaView(discord.ui.View):
@@ -477,17 +489,19 @@ async def send_lunexa_welcome(ctx):
     embed.title = "Hey, I'm whAlien"
     
     embed.description = (
-        "**Server Prefix** `.`\n"
-        "**Get Started** Run `.commands` to discover all features\n"
-        "**Support** Having issues ? Join our Support Server\n"
-        "\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        "Hey, I'm whAlien\n\n"
+        "────────────────────────────\n\n"
+        "**Server Prefix:** `. `\n\n"
+        "**Get Started:** Run `.commands` to discover all features\n"
+        "**Support:** Having issues? Join our Support Server\n\n"
+        "────────────────────────────\n\n"
+        "*Powered by guddu mistri*"
     )
 
     if bot.user.display_avatar:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
 
-    embed.set_footer(text="Powered by guddu mistri")
+    embed.set_footer(text="SBot v1.0 | Moderation & Utilities")
     await ctx.send(embed=embed, view=WhAlienInfoView())
 
 
