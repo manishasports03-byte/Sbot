@@ -1072,11 +1072,11 @@ async def on_message(message):
 
 # ===== HELP & SETUP COMMANDS =====
 
-@bot.command(name="help", aliases=["h"])
-async def help_command(ctx):
+@bot.command(name="commands", aliases=["cmd"])
+async def commands_command(ctx):
     """Show bot help and all available commands"""
     embed = discord.Embed(
-        title="📚 SBot Help & Commands",
+        title="📚 SBot Commands",
         color=discord.Color.blue(),
         description="Here are all available commands:"
     )
@@ -1111,7 +1111,7 @@ async def help_command(ctx):
     # Info
     embed.add_field(
         name="ℹ️ Info Commands",
-        value="`!about` or `!info` - Bot information",
+        value="`!about` or `!info` - Bot information\n`!commands` - Show all commands",
         inline=False
     )
 
@@ -1131,7 +1131,7 @@ async def help_command(ctx):
         inline=False
     )
 
-    embed.set_footer(text="Made with ❤️ by @_anuneet1x | Prefix: !")
+    embed.set_footer(text="Use !commands to see all commands | Made with ❤️ by @_anuneet1x | Prefix: !")
     await ctx.send(embed=embed)
 
 
