@@ -416,19 +416,16 @@ async def handle_role_toggle(message):
 
 async def send_bot_info(ctx):
     embed = discord.Embed(color=discord.Color.from_str("#2b2d31"))
-    embed.title = "Hey, I'm whAlien"
     
     embed.description = (
-        "**Server Prefix:** `.`\n"
+        "Hey, I'm whAlien\n\n"
+        "**Server Prefix:** `. `\n"
         "**Get Started:** Run `.commands` to discover all features\n"
-        "**Support:** Having issues? Join our Support Server\n\n"
-        "────────────────────────────"
+        "**Support:** Having issues? Join our Support Server\n"
+        "────────────────────────────\n"
+        "*Powered by Guddu Mistri*"
     )
 
-    if bot.user.display_avatar:
-        embed.set_thumbnail(url=bot.user.display_avatar.url)
-
-    embed.set_footer(text="Powered by Guddu Mistri")
     await ctx.send(embed=embed, view=WhAlienInfoView())
 
 
@@ -481,19 +478,16 @@ class LunexaView(discord.ui.View):
 
 async def send_lunexa_welcome(ctx):
     embed = discord.Embed(color=discord.Color.from_str("#2b2d31"))
-    embed.title = "Hey, I'm whAlien"
     
     embed.description = (
-        "**Server Prefix:** `.`\n"
+        "Hey, I'm whAlien\n\n"
+        "**Server Prefix:** `. `\n"
         "**Get Started:** Run `.commands` to discover all features\n"
-        "**Support:** Having issues? Join our Support Server\n\n"
-        "────────────────────────────"
+        "**Support:** Having issues? Join our Support Server\n"
+        "────────────────────────────\n"
+        "*Powered by Guddu Mistri*"
     )
 
-    if bot.user.display_avatar:
-        embed.set_thumbnail(url=bot.user.display_avatar.url)
-
-    embed.set_footer(text="Powered by Guddu Mistri")
     await ctx.send(embed=embed, view=WhAlienInfoView())
 
 
