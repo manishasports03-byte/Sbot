@@ -1231,10 +1231,6 @@ A powerful multipurpose bot with fast and reliable features
 
 @bot.command(name="setup")
 @commands.has_permissions(administrator=True)
-
-
-@bot.command(name="setup")
-@commands.has_permissions(administrator=True)
 async def setup_command(ctx):
     """Setup bot configuration for your server"""
     embed = discord.Embed(
