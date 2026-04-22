@@ -418,6 +418,12 @@ async def send_bot_info(ctx):
     support_url = os.getenv("SUPPORT_URL", "https://discord.com")
     embed = discord.Embed(color=discord.Color.from_str("#2b2d31"))
     
+    # Author section with bot profile picture
+    embed.set_author(
+        name="whAlien ✨",
+        icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
+    )
+    
     # Compact text block (original wording, tight spacing)
     embed.description = (
         "Hey, I'm whAlien\n\n"
@@ -485,6 +491,12 @@ class LunexaView(discord.ui.View):
 async def send_lunexa_welcome(ctx):
     support_url = os.getenv("SUPPORT_URL", "https://discord.com")
     embed = discord.Embed(color=discord.Color.from_str("#2b2d31"))
+    
+    # Author section with bot profile picture
+    embed.set_author(
+        name="whAlien ✨",
+        icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
+    )
     
     # Compact text block (original wording, tight spacing)
     embed.description = (
