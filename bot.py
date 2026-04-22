@@ -31,6 +31,7 @@ INVITE_UI_COLOR = discord.Color.from_str("#2b2d31")
 INVITED_PAGE_SIZE = 5
 RESTART_NOTIFY_USER_ID = 760729575789166652
 startup_notice_sent = False
+MESSAGE_DAILY_RESET_KEY = "message_daily_reset_date"
 
 # ===== ACTIVITY ROTATION =====
 ACTIVITY_MESSAGES = [
@@ -119,6 +120,31 @@ def init_invite_database():
                 leave_channel INTEGER
             )
         """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS message_stats (
+                guild_id INTEGER,
+                user_id INTEGER,
+                messages INTEGER DEFAULT 0,
+                daily_messages INTEGER DEFAULT 0,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS message_blacklist (
+                guild_id INTEGER,
+                channel_id INTEGER,
+                PRIMARY KEY (guild_id, channel_id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bot_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
         
         db_connection.commit()
         print("✅ Database initialized successfully")
@@ -197,6 +223,179 @@ def get_leaderboard(guild_id, limit=10):
     except sqlite3.Error as e:
         print(f"Database error: {e}")
         return []
+
+
+def get_state_value(key):
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute("SELECT value FROM bot_state WHERE key = ?", (key,))
+        result = cursor.fetchone()
+        return result[0] if result else None
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return None
+
+
+def set_state_value(key, value):
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO bot_state (key, value) VALUES (?, ?)",
+            (key, value)
+        )
+        db_connection.commit()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+
+def reset_daily_message_counts_if_needed():
+    today = datetime.now(timezone.utc).date().isoformat()
+    last_reset = get_state_value(MESSAGE_DAILY_RESET_KEY)
+    if last_reset == today:
+        return
+
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute("UPDATE message_stats SET daily_messages = 0")
+        db_connection.commit()
+        set_state_value(MESSAGE_DAILY_RESET_KEY, today)
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+
+def get_message_stats(guild_id, user_id):
+    try:
+        reset_daily_message_counts_if_needed()
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "SELECT messages, daily_messages FROM message_stats WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id)
+        )
+        result = cursor.fetchone()
+        if result:
+            return {"messages": result[0], "daily_messages": result[1]}
+        return {"messages": 0, "daily_messages": 0}
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return {"messages": 0, "daily_messages": 0}
+
+
+def set_message_stats(guild_id, user_id, messages, daily_messages):
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO message_stats (guild_id, user_id, messages, daily_messages)
+            VALUES (?, ?, ?, ?)
+            """,
+            (guild_id, user_id, max(0, messages), max(0, daily_messages))
+        )
+        db_connection.commit()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+
+def add_messages(guild_id, user_id, amount, update_daily=False):
+    stats = get_message_stats(guild_id, user_id)
+    new_total = max(0, stats["messages"] + amount)
+    daily_change = amount if update_daily and amount > 0 else 0
+    new_daily_total = max(0, stats["daily_messages"] + daily_change)
+    set_message_stats(guild_id, user_id, new_total, new_daily_total)
+    return {"messages": new_total, "daily_messages": new_daily_total}
+
+
+def increment_message_count(guild_id, user_id):
+    stats = get_message_stats(guild_id, user_id)
+    new_total = stats["messages"] + 1
+    new_daily_total = stats["daily_messages"] + 1
+    set_message_stats(guild_id, user_id, new_total, new_daily_total)
+    return {"messages": new_total, "daily_messages": new_daily_total}
+
+
+def clear_all_messages(guild_id):
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute("DELETE FROM message_stats WHERE guild_id = ?", (guild_id,))
+        db_connection.commit()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+
+def reset_user_messages(guild_id, user_id):
+    set_message_stats(guild_id, user_id, 0, 0)
+
+
+def get_message_leaderboard(guild_id, column="messages", limit=10):
+    if column not in {"messages", "daily_messages"}:
+        return []
+
+    try:
+        reset_daily_message_counts_if_needed()
+        cursor = db_connection.cursor()
+        cursor.execute(
+            f"""
+            SELECT user_id, {column}
+            FROM message_stats
+            WHERE guild_id = ? AND {column} > 0
+            ORDER BY {column} DESC
+            LIMIT ?
+            """,
+            (guild_id, limit)
+        )
+        return cursor.fetchall()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return []
+
+
+def blacklist_message_channel(guild_id, channel_id):
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO message_blacklist (guild_id, channel_id) VALUES (?, ?)",
+            (guild_id, channel_id)
+        )
+        db_connection.commit()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+
+def unblacklist_message_channel(guild_id, channel_id):
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "DELETE FROM message_blacklist WHERE guild_id = ? AND channel_id = ?",
+            (guild_id, channel_id)
+        )
+        db_connection.commit()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+
+def get_blacklisted_channels(guild_id):
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "SELECT channel_id FROM message_blacklist WHERE guild_id = ? ORDER BY channel_id",
+            (guild_id,)
+        )
+        return [row[0] for row in cursor.fetchall()]
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return []
+
+
+def is_message_channel_blacklisted(guild_id, channel_id):
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "SELECT 1 FROM message_blacklist WHERE guild_id = ? AND channel_id = ?",
+            (guild_id, channel_id)
+        )
+        return cursor.fetchone() is not None
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return False
 
 def set_join_channel(guild_id, channel_id):
     """Set join message channel"""
@@ -941,6 +1140,11 @@ async def rotate_activity():
     current_activity_index = (current_activity_index + 1) % len(ACTIVITY_MESSAGES)
 
 
+@tasks.loop(minutes=5)
+async def reset_daily_messages_loop():
+    reset_daily_message_counts_if_needed()
+
+
 @bot.event
 async def on_ready():
     global startup_notice_sent
@@ -948,6 +1152,7 @@ async def on_ready():
     
     # Initialize database
     init_invite_database()
+    reset_daily_message_counts_if_needed()
     
     # Cache all server invites
     for guild in bot.guilds:
@@ -956,6 +1161,9 @@ async def on_ready():
     # Start activity rotation if not already running
     if not rotate_activity.is_running():
         rotate_activity.start()
+
+    if not reset_daily_messages_loop.is_running():
+        reset_daily_messages_loop.start()
 
     if not startup_notice_sent:
         startup_notice_sent = True
@@ -1501,36 +1709,173 @@ async def removeinvites_command(ctx, member: discord.Member, amount: int):
     await ctx.send(embed=embed)
 
 
+@bot.command(name="messages")
+async def messages_command(ctx, member: discord.Member = None):
+    """Show total message count of a user"""
+    target = member or ctx.author
+    stats = get_message_stats(ctx.guild.id, target.id)
+
+    embed = discord.Embed(
+        title="Message Stats",
+        color=discord.Color.blurple()
+    )
+    embed.description = (
+        f"{target.mention} has sent **{stats['messages']}** message(s)\n"
+        f"Daily messages: **{stats['daily_messages']}**"
+    )
+    embed.set_thumbnail(url=target.display_avatar.url)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="addmessages")
+@commands.has_permissions(administrator=True)
+async def addmessages_command(ctx, member: discord.Member, amount: int):
+    """Add messages to a user"""
+    if amount <= 0:
+        await ctx.send("Please specify a positive amount.")
+        return
+
+    stats = add_messages(ctx.guild.id, member.id, amount)
+
+    embed = discord.Embed(
+        title="Messages Added",
+        description=f"Added **{amount}** message(s) to {member.mention}",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="New Total", value=str(stats["messages"]))
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="removemessages")
+@commands.has_permissions(administrator=True)
+async def removemessages_command(ctx, member: discord.Member, amount: int):
+    """Remove messages from a user"""
+    if amount <= 0:
+        await ctx.send("Please specify a positive amount.")
+        return
+
+    stats = add_messages(ctx.guild.id, member.id, -amount)
+
+    embed = discord.Embed(
+        title="Messages Removed",
+        description=f"Removed **{amount}** message(s) from {member.mention}",
+        color=discord.Color.orange()
+    )
+    embed.add_field(name="New Total", value=str(stats["messages"]))
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="blacklistchannel")
+@commands.has_permissions(administrator=True)
+async def blacklistchannel_command(ctx, channel: discord.TextChannel):
+    """Do not count messages from this channel"""
+    blacklist_message_channel(ctx.guild.id, channel.id)
+    await ctx.send(f"{channel.mention} has been blacklisted from message tracking.")
+
+
+@bot.command(name="unblacklistchannel")
+@commands.has_permissions(administrator=True)
+async def unblacklistchannel_command(ctx, channel: discord.TextChannel):
+    """Remove a channel from the message blacklist"""
+    unblacklist_message_channel(ctx.guild.id, channel.id)
+    await ctx.send(f"{channel.mention} has been removed from the message blacklist.")
+
+
+@bot.command(name="blacklistedchannels")
+async def blacklistedchannels_command(ctx):
+    """Show all blacklisted channels"""
+    channel_ids = get_blacklisted_channels(ctx.guild.id)
+    if not channel_ids:
+        await ctx.send("No blacklisted channels configured.")
+        return
+
+    lines = []
+    for channel_id in channel_ids:
+        channel = ctx.guild.get_channel(channel_id)
+        lines.append(channel.mention if channel else f"Deleted Channel ({channel_id})")
+
+    embed = discord.Embed(
+        title="Blacklisted Channels",
+        description="\n".join(lines),
+        color=discord.Color.blurple()
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="clearmessages")
+@commands.has_permissions(administrator=True)
+async def clearmessages_command(ctx):
+    """Reset all message data in server"""
+    clear_all_messages(ctx.guild.id)
+    await ctx.send("All message tracking data for this server has been reset.")
+
+
+@bot.command(name="resetmymessages")
+async def resetmymessages_command(ctx):
+    """Reset own message count"""
+    reset_user_messages(ctx.guild.id, ctx.author.id)
+    await ctx.send(f"{ctx.author.mention}, your message count has been reset.")
+
+
 @bot.command(name="leaderboard")
 async def leaderboard_command(ctx, category: str = "invites"):
-    """Show top inviters leaderboard"""
-    if category.lower() not in ["invites", "inv"]:
-        await ctx.send("Usage: `.leaderboard invites`")
+    """Show leaderboard stats"""
+    category = category.lower()
+
+    if category in ["invites", "inv"]:
+        leaderboard = get_leaderboard(ctx.guild.id, limit=10)
+
+        if not leaderboard:
+            await ctx.send("No invite data available yet.")
+            return
+
+        embed = discord.Embed(
+            title="🏆 Invite Leaderboard",
+            color=discord.Color.gold()
+        )
+
+        leaderboard_text = ""
+        for rank, (user_id, count) in enumerate(leaderboard, start=1):
+            try:
+                user = await bot.fetch_user(user_id)
+                medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
+                leaderboard_text += f"{medal} {user.mention} - **{count}** invite{'s' if count != 1 else ''}\n"
+            except:
+                leaderboard_text += f"#{rank} User({user_id}) - **{count}** invite{'s' if count != 1 else ''}\n"
+
+        embed.description = leaderboard_text
+        embed.set_footer(text=f"Total top inviters: {len(leaderboard)}")
+        await ctx.send(embed=embed)
         return
-    
-    leaderboard = get_leaderboard(ctx.guild.id, limit=10)
-    
-    if not leaderboard:
-        await ctx.send("No invite data available yet.")
+
+    if category in ["messages", "dailymessages"]:
+        stat_column = "messages" if category == "messages" else "daily_messages"
+        leaderboard = get_message_leaderboard(ctx.guild.id, column=stat_column, limit=10)
+
+        if not leaderboard:
+            await ctx.send("No message data available yet.")
+            return
+
+        embed = discord.Embed(
+            title="🏆 Message Leaderboard" if category == "messages" else "🏆 Daily Message Leaderboard",
+            color=discord.Color.gold()
+        )
+
+        leaderboard_text = ""
+        for rank, (user_id, count) in enumerate(leaderboard, start=1):
+            try:
+                user = await bot.fetch_user(user_id)
+                medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
+                leaderboard_text += f"{medal} {user.mention} - **{count}** message{'s' if count != 1 else ''}\n"
+            except:
+                leaderboard_text += f"#{rank} User({user_id}) - **{count}** message{'s' if count != 1 else ''}\n"
+
+        embed.description = leaderboard_text
+        embed.set_footer(text=f"Total ranked users: {len(leaderboard)}")
+        await ctx.send(embed=embed)
         return
-    
-    embed = discord.Embed(
-        title="🏆 Invite Leaderboard",
-        color=discord.Color.gold()
-    )
-    
-    leaderboard_text = ""
-    for rank, (user_id, count) in enumerate(leaderboard, start=1):
-        try:
-            user = await bot.fetch_user(user_id)
-            medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
-            leaderboard_text += f"{medal} {user.mention} - **{count}** invite{'s' if count != 1 else ''}\n"
-        except:
-            leaderboard_text += f"#{rank} User({user_id}) - **{count}** invite{'s' if count != 1 else ''}\n"
-    
-    embed.description = leaderboard_text
-    embed.set_footer(text=f"Total top inviters: {len(leaderboard)}")
-    await ctx.send(embed=embed)
+
+    await ctx.send("Usage: `.leaderboard invites`, `.leaderboard messages`, or `.leaderboard dailymessages`")
 
 
 @bot.event
@@ -1542,6 +1887,9 @@ async def on_message(message):
     
     # ===== SPAM DETECTION & PROTECTION =====
     if not message.author.bot and message.guild:
+        if not is_message_channel_blacklisted(message.guild.id, message.channel.id):
+            increment_message_count(message.guild.id, message.author.id)
+
         # Check for spam
         spam_tracker[message.author.id].append(datetime.now(timezone.utc))
         
@@ -1735,6 +2083,7 @@ A powerful multipurpose bot with fast and reliable features
 🛡️ Moderation
 ⚙️ Utility
 ℹ️ Info
+📊 Messages
 📨 Invites
 ⚡ Features"""
     
@@ -1754,6 +2103,7 @@ class ModuleView(discord.ui.View):
             discord.SelectOption(label="Moderation", value="mod", emoji="🛡️"),
             discord.SelectOption(label="Utility", value="util", emoji="⚙️"),
             discord.SelectOption(label="Info", value="info", emoji="ℹ️"),
+            discord.SelectOption(label="Messages", value="messages", emoji="📊"),
             discord.SelectOption(label="Invites", value="invites", emoji="📨"),
             discord.SelectOption(label="Features", value="features", emoji="⚡")
         ]
@@ -1808,6 +2158,24 @@ class ModuleView(discord.ui.View):
 `.help` - Help menu (you are here)
 `.setup` - Server setup guide
 `.stats` - Server statistics
+                """
+            )
+
+        elif selected == "messages":
+            return discord.Embed(
+                title="📊 Messages Commands",
+                color=discord.Color.from_str("#2b2d31"),
+                description="""
+`.messages [@user]` - Show total message count
+`.addmessages @user amount` - Add messages to a user
+`.removemessages @user amount` - Remove messages from a user
+`.blacklistchannel #channel` - Exclude a channel from tracking
+`.unblacklistchannel #channel` - Remove a blacklist entry
+`.blacklistedchannels` - Show blacklisted channels
+`.clearmessages` - Reset all message data
+`.resetmymessages` - Reset your own message count
+`.leaderboard messages` - Show top message senders
+`.leaderboard dailymessages` - Show top daily message senders
                 """
             )
         
@@ -1869,6 +2237,7 @@ class HelpView(discord.ui.View):
             discord.SelectOption(label="Moderation", value="mod", emoji="🛡️"),
             discord.SelectOption(label="Utility", value="util", emoji="⚙️"),
             discord.SelectOption(label="Info", value="info", emoji="ℹ️"),
+            discord.SelectOption(label="Messages", value="messages", emoji="📊"),
             discord.SelectOption(label="Invites", value="invites", emoji="📨"),
             discord.SelectOption(label="Features", value="features", emoji="⚡")
         ]
@@ -1917,6 +2286,24 @@ class HelpView(discord.ui.View):
 `.help` - Help menu (you are here)
 `.setup` - Server setup guide
 `.stats` - Server statistics
+                """
+            )
+
+        elif selected == "messages":
+            return discord.Embed(
+                title="📊 Messages Commands",
+                color=discord.Color.from_str("#2b2d31"),
+                description="""
+`.messages [@user]` - Show total message count
+`.addmessages @user amount` - Add messages to a user
+`.removemessages @user amount` - Remove messages from a user
+`.blacklistchannel #channel` - Exclude a channel from tracking
+`.unblacklistchannel #channel` - Remove a blacklist entry
+`.blacklistedchannels` - Show blacklisted channels
+`.clearmessages` - Reset all message data
+`.resetmymessages` - Reset your own message count
+`.leaderboard messages` - Show top message senders
+`.leaderboard dailymessages` - Show top daily message senders
                 """
             )
         
