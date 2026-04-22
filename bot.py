@@ -29,6 +29,8 @@ db_connection = None
 server_invites = {}  # {guild_id: {invite_code: invite_object}}
 INVITE_UI_COLOR = discord.Color.from_str("#2b2d31")
 INVITED_PAGE_SIZE = 5
+RESTART_NOTIFY_USER_ID = 760729575789166652
+startup_notice_sent = False
 
 # ===== ACTIVITY ROTATION =====
 ACTIVITY_MESSAGES = [
@@ -541,6 +543,44 @@ def find_role(guild, role_name):
     return None
 
 
+async def send_restart_notice():
+    message = f"<@{RESTART_NOTIFY_USER_ID}> bot is back online after the update"
+
+    for guild in bot.guilds:
+        member = guild.get_member(RESTART_NOTIFY_USER_ID)
+        if not member:
+            continue
+
+        candidate_channels = []
+        if guild.system_channel:
+            candidate_channels.append(guild.system_channel)
+
+        candidate_channels.extend(guild.text_channels)
+
+        seen_channel_ids = set()
+        for channel in candidate_channels:
+            if channel.id in seen_channel_ids:
+                continue
+            seen_channel_ids.add(channel.id)
+
+            permissions = channel.permissions_for(guild.me)
+            if not permissions.send_messages:
+                continue
+
+            try:
+                await channel.send(message)
+                return True
+            except discord.HTTPException:
+                continue
+
+    try:
+        user = await bot.fetch_user(RESTART_NOTIFY_USER_ID)
+        await user.send("bot is back online after the update")
+        return True
+    except discord.HTTPException:
+        return False
+
+
 async def handle_role_toggle(message):
     if not message.guild:
         await message.channel.send("Role changes only work inside a server.")
@@ -903,6 +943,7 @@ async def rotate_activity():
 
 @bot.event
 async def on_ready():
+    global startup_notice_sent
     print(f"Logged in as {bot.user}")
     
     # Initialize database
@@ -915,6 +956,10 @@ async def on_ready():
     # Start activity rotation if not already running
     if not rotate_activity.is_running():
         rotate_activity.start()
+
+    if not startup_notice_sent:
+        startup_notice_sent = True
+        await send_restart_notice()
     
     try:
         synced = await bot.tree.sync()
