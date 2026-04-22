@@ -17,7 +17,7 @@ intents.message_content = True
 intents.voice_states = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix=".", intents=intents)
 
 # ===== CONFIG =====
 bad_words = ["mc", "bc", "madarchod", "bhosdike", "chutiya", "idiot", "stupid"]
@@ -415,24 +415,23 @@ async def handle_role_toggle(message):
 
 
 async def send_bot_info(ctx):
-    guild_id = ctx.guild.id if ctx.guild else "DM"
-    embed = discord.Embed(title=f"{bot.user.display_name} Info", color=discord.Color.dark_gray())
+    embed = discord.Embed(color=discord.Color.dark_gray())
+    embed.title = "Hey, I'm whAlien"
     embed.description = (
-        "Hey, I'm here to help with server utilities.\n\n"
-        "**Guild Settings**\n"
-        "Prefix : `!`\n"
-        "Language : Eng\n"
-        f"Server Id : `{guild_id}`\n\n"
-        "Made with \u2764 by @_anuneet1x"
+        "\n"
+        "**Server Prefix:** `.`\n"
+        "**Get Started:** Run `.commands` to discover all features\n"
+        "**Support:** Having issues ? Join our Support Server"
     )
 
     if bot.user.display_avatar:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
 
-    await ctx.send(embed=embed, view=BotInfoView())
+    embed.set_footer(text="Powered by guddu mistri")
+    await ctx.send(embed=embed, view=WhAlienInfoView())
 
 
-class BotInfoView(discord.ui.View):
+class WhAlienInfoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -444,11 +443,9 @@ class BotInfoView(discord.ui.View):
         )
         invite_url = discord.utils.oauth_url(bot.user.id, permissions=permissions)
         support_url = os.getenv("SUPPORT_URL", "https://discord.com")
-        vote_url = os.getenv("VOTE_URL", "https://discord.com")
 
-        self.add_item(discord.ui.Button(label="Invite", url=invite_url))
-        self.add_item(discord.ui.Button(label="Support", url=support_url))
-        self.add_item(discord.ui.Button(label="Vote", url=vote_url))
+        self.add_item(discord.ui.Button(label="Features", style=discord.ButtonStyle.blurple, url=support_url))
+        self.add_item(discord.ui.Button(label="Support Server", style=discord.ButtonStyle.link, url=support_url))
 
 
 class LunexaView(discord.ui.View):
@@ -481,24 +478,20 @@ class LunexaView(discord.ui.View):
 
 
 async def send_lunexa_welcome(ctx):
-    guild_id = ctx.guild.id if ctx.guild else "DM"
-    embed = discord.Embed(
-        title="poyoyoi Utility Bot",
-        color=discord.Color.dark_gray(),
-    )
+    embed = discord.Embed(color=discord.Color.dark_gray())
+    embed.title = "Hey, I'm whAlien"
     embed.description = (
-        "Hey, I'm a utility bot for your server.\n\n"
-        "**Guild Settings**\n"
-        "Prefix : `!`\n"
-        "Language : Eng\n"
-        f"Server Id : `{guild_id}`\n\n"
-        "Made with \u2764 by @_anuneet1x"
+        "\n"
+        "**Server Prefix:** `.`\n"
+        "**Get Started:** Run `.commands` to discover all features\n"
+        "**Support:** Having issues ? Join our Support Server"
     )
 
     if bot.user.display_avatar:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
 
-    await ctx.send(embed=embed, view=LunexaView())
+    embed.set_footer(text="Powered by guddu mistri")
+    await ctx.send(embed=embed, view=WhAlienInfoView())
 
 
 class AFKConfirmView(discord.ui.View):
@@ -1085,13 +1078,13 @@ async def commands_command(ctx):
     embed.add_field(
         name="🛡️ Moderation Commands",
         value="""
-`!warn @user [reason]` - Warn a member
-`!mute @user [duration]` - Mute a member (e.g., 10m, 1h)
-`!unmute @user` - Unmute a member
-`!kick @user [reason]` - Kick a member
-`!ban @user [reason]` - Ban a member
-`!purge [amount]` - Delete messages
-`!slowmode [seconds]` - Set channel slowmode
+`.warn @user [reason]` - Warn a member
+`.mute @user [duration]` - Mute a member (e.g., 10m, 1h)
+`.unmute @user` - Unmute a member
+`.kick @user [reason]` - Kick a member
+`.ban @user [reason]` - Ban a member
+`.purge [amount]` - Delete messages
+`.slowmode [seconds]` - Set channel slowmode
         """,
         inline=False
     )
@@ -1100,10 +1093,10 @@ async def commands_command(ctx):
     embed.add_field(
         name="🎫 Tickets & Utilities",
         value="""
-`!tickets` - Show ticket creation panel
-`!modlogs [@user]` - View moderation logs
-`!afk [reason]` - Go AFK
-`!role @user Role Name` - Toggle role
+`.tickets` - Show ticket creation panel
+`.modlogs [@user]` - View moderation logs
+`.afk [reason]` - Go AFK
+`.role @user Role Name` - Toggle role
         """,
         inline=False
     )
@@ -1111,7 +1104,7 @@ async def commands_command(ctx):
     # Info
     embed.add_field(
         name="ℹ️ Info Commands",
-        value="`!about` or `!info` - Bot information\n`!commands` - Show all commands",
+        value="`about` or `.info` - Bot information\n`.commands` - Show all commands",
         inline=False
     )
 
@@ -1131,7 +1124,7 @@ async def commands_command(ctx):
         inline=False
     )
 
-    embed.set_footer(text="Use !commands to see all commands | Made with ❤️ by @_anuneet1x | Prefix: !")
+    embed.set_footer(text="Use .commands to see all commands | Made with ❤️ by guddu mistri | Prefix: .")
     await ctx.send(embed=embed)
 
 
