@@ -1457,10 +1457,14 @@ async def on_member_join(member):
                         invites_count = get_invites(guild.id, inviter_id)
                         embed = discord.Embed(
                             title="👋 New Member Joined",
-                            description=f"{member.mention} joined the server!",
+                            description=f"{member.display_name} joined the server!",
                             color=discord.Color.green()
                         )
-                        embed.add_field(name="Invited by", value=f"{used_invite.inviter.mention}", inline=False)
+                        embed.add_field(
+                            name="Invited by",
+                            value=getattr(used_invite.inviter, "display_name", used_invite.inviter.name),
+                            inline=False
+                        )
                         embed.add_field(name="Inviter's Total Invites", value=str(invites_count), inline=False)
                         embed.set_thumbnail(url=member.display_avatar.url)
                         await channel.send(embed=embed)
@@ -2195,7 +2199,7 @@ async def inviter_command(ctx, member: discord.Member = None):
     
     inviter_id = get_inviter(ctx.guild.id, target.id)
     if not inviter_id:
-        await ctx.send(f"Could not find who invited {target.mention}.")
+        await ctx.send(f"Could not find who invited {target.display_name}.")
         return
     
     try:
@@ -2204,11 +2208,14 @@ async def inviter_command(ctx, member: discord.Member = None):
             title="👤 Who Invited",
             color=discord.Color.blurple()
         )
-        embed.description = f"{target.mention} was invited by {inviter.mention}"
+        embed.description = (
+            f"{target.display_name} was invited by "
+            f"{getattr(inviter, 'display_name', inviter.name)}"
+        )
         embed.set_thumbnail(url=target.display_avatar.url)
         await ctx.send(embed=embed)
     except:
-        await ctx.send(f"Could not find who invited {target.mention}.")
+        await ctx.send(f"Could not find who invited {target.display_name}.")
 
 
 @bot.command(name="invited")
@@ -2219,14 +2226,14 @@ async def invited_command(ctx, member: discord.Member = None):
     invited_users = get_invited_users(ctx.guild.id, target.id)
 
     if not invited_users:
-        await ctx.send(f"{target.mention} hasn't invited anyone.")
+        await ctx.send(f"{target.display_name} hasn't invited anyone.")
         return
 
     entries = []
     for uid in invited_users:
         try:
             user = ctx.guild.get_member(uid) or await bot.fetch_user(uid)
-            entries.append(user.mention)
+            entries.append(getattr(user, "display_name", user.name))
         except Exception:
             entries.append(f"User({uid})")
 
@@ -2254,7 +2261,7 @@ async def inviteinfo_command(ctx):
     )
     
     for invite in invites[:10]:  # Show max 10 invites
-        creator = invite.inviter.mention if invite.inviter else "Unknown"
+        creator = getattr(invite.inviter, "display_name", invite.inviter.name) if invite.inviter else "Unknown"
         expires = "Never" if not invite.expires_at else invite.expires_at.strftime("%Y-%m-%d")
         embed.add_field(
             name=f"discord.gg/{invite.code}",
@@ -2305,7 +2312,7 @@ async def addinvites_command(ctx, member: discord.Member, amount: int):
     
     embed = discord.Embed(
         title="➕ Invites Added",
-        description=f"Added **{amount}** invite(s) to {member.mention}",
+        description=f"Added **{amount}** invite(s) to {member.display_name}",
         color=discord.Color.green()
     )
     embed.add_field(name="New Total", value=str(new_total))
@@ -2324,7 +2331,7 @@ async def removeinvites_command(ctx, member: discord.Member, amount: int):
     
     embed = discord.Embed(
         title="➖ Invites Removed",
-        description=f"Removed **{amount}** invite(s) from {member.mention}",
+        description=f"Removed **{amount}** invite(s) from {member.display_name}",
         color=discord.Color.orange()
     )
     embed.add_field(name="New Total", value=str(new_total))
@@ -2461,7 +2468,10 @@ async def leaderboard_command(ctx, category: str = "invites"):
             try:
                 user = await bot.fetch_user(user_id)
                 medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
-                leaderboard_text += f"{medal} {user.mention} - **{count}** invite{'s' if count != 1 else ''}\n"
+                leaderboard_text += (
+                    f"{medal} {getattr(user, 'display_name', user.name)} - "
+                    f"**{count}** invite{'s' if count != 1 else ''}\n"
+                )
             except:
                 leaderboard_text += f"#{rank} User({user_id}) - **{count}** invite{'s' if count != 1 else ''}\n"
 
