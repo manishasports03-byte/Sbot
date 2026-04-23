@@ -2,6 +2,7 @@ import os
 import random
 import json
 import re
+import copy
 import asyncpg
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
@@ -43,6 +44,19 @@ LEADERBOARD_PAGE_SIZE = 10
 RESTART_NOTIFY_USER_ID = 760729575789166652
 startup_notice_sent = False
 MESSAGE_DAILY_RESET_KEY = "message_daily_reset_date"
+NO_PREFIX_COMMANDS = {
+    "about", "info", "botinfo", "ping", "invite",
+    "serverinfo", "userinfo", "roleinfo", "vcinfo", "avatar", "banner", "guildbanner",
+    "membercount", "shards", "permissions", "accountage", "uptime", "stats", "setup",
+    "tickets", "sendtickets", "modlogs",
+    "invites", "inv", "i", "inviter", "invited", "inviteinfo",
+    "addinvites", "removeinvites", "clearinvites", "resetmyinvites",
+    "messages", "m", "addmessages", "removemessages",
+    "blacklistchannel", "unblacklistchannel", "blacklistedchannels", "clearmessages", "resetmymessages",
+    "lb", "leaderboard",
+    "warn", "mute", "unmute", "kick", "ban", "purge", "slowmode",
+    "gstart", "gend", "greroll",
+}
 
 # ===== ACTIVITY ROTATION =====
 ACTIVITY_MESSAGES = [
@@ -3298,6 +3312,24 @@ async def on_message(message):
         return
 
     msg = message.content.lower()
+
+    if (
+        message.guild
+        and not message.author.bot
+        and not message.content.startswith(DEFAULT_PREFIX)
+    ):
+        first_word = message.content.split(maxsplit=1)[0].lower() if message.content.strip() else ""
+        is_admin_user = (
+            message.author.guild_permissions.administrator
+            or message.author.guild_permissions.manage_guild
+        )
+        if is_admin_user and first_word in NO_PREFIX_COMMANDS:
+            prefixed_message = copy.copy(message)
+            prefixed_message.content = f"{DEFAULT_PREFIX}{message.content}"
+            ctx = await bot.get_context(prefixed_message)
+            if ctx.valid:
+                await bot.invoke(ctx)
+                return
     
     # ===== SPAM DETECTION & PROTECTION =====
     if not message.author.bot and message.guild:
