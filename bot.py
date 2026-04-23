@@ -1,6 +1,5 @@
 import os
 import random
-import json
 import re
 import copy
 import asyncpg
@@ -68,11 +67,6 @@ ACTIVITY_MESSAGES = [
 ]
 current_activity_index = 0
 
-# Cash tracking
-CASH_DATA_FILE = "cash_data.json"
-TRACKED_USER_ID = 760729575789166652
-USER_WAITING_FOR_CASH = None
-
 # ===== TEMP VC CONFIG =====
 TEMP_VC_CATEGORY_NAME = "Temporary Channels"
 TEMP_VC_PARENT_CHANNEL_ID = None  # Set to parent category ID if you have one
@@ -104,19 +98,6 @@ RAID_WINDOW = 60  # seconds
 # ===== MODERATION CONFIG =====
 warnings = defaultdict(lambda: defaultdict(int))  # {guild_id: {user_id: count}}
 moderation_logs = defaultdict(list)  # {guild_id: [log_entries]}
-
-def load_cash_data():
-    """Load cash history from file"""
-    try:
-        with open(CASH_DATA_FILE, 'r') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-def save_cash_data(data):
-    """Save cash history to file"""
-    with open(CASH_DATA_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
 
 async def load_guild_prefixes():
     """Load guild prefixes from PostgreSQL into cache."""
@@ -614,18 +595,6 @@ def parse_short_duration(duration_text):
         return amount * duration_map[unit]
     except (ValueError, IndexError):
         return None
-
-def extract_cash_amount(text):
-    """Extract cash amount from text (e.g., '100,000' or '100000')"""
-    # Look for currency patterns like: $1,234 or 1,234 or just numbers
-    match = re.search(r'[\$₽]?\s*([0-9,]+(?:\.[0-9]{2})?)', text)
-    if match:
-        amount_str = match.group(1).replace(',', '')
-        try:
-            return float(amount_str)
-        except ValueError:
-            return None
-    return None
 
 def log_moderation_action(guild_id, action, moderator, target, reason=""):
     """Log moderation actions"""
@@ -3374,52 +3343,6 @@ async def on_message(message):
             except:
                 pass
 
-    # Track cash for specific user
-    global USER_WAITING_FOR_CASH
-    
-    if not no_prefix_blocked_channel and message.author.id == TRACKED_USER_ID and msg == "o cash":
-        USER_WAITING_FOR_CASH = TRACKED_USER_ID
-        return
-
-    # Capture cash response from owo bot
-    if not no_prefix_blocked_channel and USER_WAITING_FOR_CASH == TRACKED_USER_ID and message.author.name.lower() == "owo":
-        cash_amount = extract_cash_amount(message.content)
-        if cash_amount is not None:
-            cash_data = load_cash_data()
-            current_time = datetime.now(timezone.utc).isoformat()
-            
-            user_id_str = str(TRACKED_USER_ID)
-            if user_id_str not in cash_data:
-                cash_data[user_id_str] = []
-            
-            last_amount = None
-            if cash_data[user_id_str]:
-                last_amount = cash_data[user_id_str][-1]['amount']
-            
-            cash_data[user_id_str].append({
-                'amount': cash_amount,
-                'timestamp': current_time
-            })
-            save_cash_data(cash_data)
-            
-            # Send profit/loss message
-            if last_amount is not None:
-                diff = cash_amount - last_amount
-                if diff > 0:
-                    status = f"📈 **Profit**: +{diff:,.0f}"
-                elif diff < 0:
-                    status = f"📉 **Loss**: {diff:,.0f}"
-                else:
-                    status = "➡️ **No change**"
-                
-                await message.channel.send(
-                    f"{message.author.mention} | Current: {cash_amount:,.0f} | {status}",
-                    allowed_mentions=discord.AllowedMentions(users=False)
-                )
-            
-            USER_WAITING_FOR_CASH = None
-        return
-
     if not no_prefix_blocked_channel and bot.user in message.mentions and not message.reference:
         cleaned = message.content.replace(bot.user.mention, "").strip()
         nickname_mention = f"<@!{bot.user.id}>"
@@ -3430,7 +3353,7 @@ async def on_message(message):
             await send_lunexa_welcome(ctx)
             return
 
-    if not no_prefix_blocked_channel and (msg == "role" or msg.startswith("role ") or msg == "!role" or msg.startswith("!role ")):
+    if msg == "role" or msg.startswith("role ") or msg == "!role" or msg.startswith("!role "):
         await handle_role_toggle(message)
         return
 
@@ -3473,11 +3396,6 @@ async def on_message(message):
             reply = random.choice(responses)
             await message.channel.send(f"{message.author.mention} {reply}")
             break
-
-    if not no_prefix_blocked_channel and message.author.id == 760729575789166652 and msg == "soja morni":
-        await message.channel.send("hap \U0001f380")
-        await bot.close()
-        return
 
     for mentioned_user in message.mentions:
         afk_data = await get_afk_state(message.guild.id, mentioned_user.id) if message.guild else None
