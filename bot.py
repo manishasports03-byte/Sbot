@@ -2163,7 +2163,7 @@ async def invite_command(ctx):
     await ctx.send(embed=embed)
 
 
-@bot.command(name="serverinfo")
+@bot.command(name="serverinfo", aliases=["si"])
 async def serverinfo_command(ctx):
     """Show server details"""
     guild = ctx.guild
@@ -2171,19 +2171,57 @@ async def serverinfo_command(ctx):
         await ctx.send("This command can only be used in a server.")
         return
 
+    color = discord.Color.from_rgb(88, 101, 242)
+    owner_text = str(guild.owner) if guild.owner else "Unknown"
+    verification_level = str(guild.verification_level).replace("_", " ").title()
+
     embed = discord.Embed(
-        title=f"{guild.name} Server Info",
-        color=discord.Color.blurple()
+        title=guild.name,
+        description="📊 Server Information",
+        color=color
     )
-    embed.add_field(name="Owner", value=str(guild.owner) if guild.owner else "Unknown", inline=True)
-    embed.add_field(name="Members", value=str(guild.member_count), inline=True)
-    embed.add_field(name="Roles", value=str(len(guild.roles)), inline=True)
-    embed.add_field(name="Channels", value=str(len(guild.channels)), inline=True)
-    embed.add_field(name="Text Channels", value=str(len(guild.text_channels)), inline=True)
-    embed.add_field(name="Voice Channels", value=str(len(guild.voice_channels)), inline=True)
-    embed.add_field(name="Created", value=discord.utils.format_dt(guild.created_at, style="F"), inline=False)
+
+    embed.add_field(
+        name="📜 General Info",
+        value=(
+            f"Name: {guild.name}\n"
+            f"Server ID: {guild.id}\n"
+            f"Owner: {owner_text}\n"
+            f"Created: {discord.utils.format_dt(guild.created_at, style='F')}"
+        ),
+        inline=True
+    )
+    embed.add_field(
+        name="👥 Members & Roles",
+        value=(
+            f"Members: {guild.member_count}\n"
+            f"Roles: {len(guild.roles)}\n"
+            f"Verification Level: {verification_level}"
+        ),
+        inline=True
+    )
+    embed.add_field(
+        name="💎 Boost Status",
+        value=(
+            f"Level: {guild.premium_tier}\n"
+            f"Boosts: {guild.premium_subscription_count}\n"
+            f"AFK Timeout: {guild.afk_timeout}"
+        ),
+        inline=True
+    )
+    embed.add_field(
+        name="📁 Channels",
+        value=(
+            f"Text: {len(guild.text_channels)}\n"
+            f"Voice: {len(guild.voice_channels)}\n"
+            f"Categories: {len(guild.categories)}"
+        ),
+        inline=True
+    )
+
     if guild.icon:
         embed.set_thumbnail(url=guild.icon.url)
+    embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
     await ctx.send(embed=embed)
 
 
