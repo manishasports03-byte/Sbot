@@ -2251,7 +2251,7 @@ async def modlogs_command(ctx, member: discord.Member = None):
 
 # ===== INVITE TRACKING COMMANDS =====
 
-@bot.command(name="invites", aliases=["inv"])
+@bot.command(name="invites", aliases=["inv", "i"])
 async def invites_command(ctx, member: discord.Member = None):
     """Show number of invites of a user"""
     target = member or ctx.author
@@ -2393,7 +2393,7 @@ async def resetmyinvites_command(ctx):
     await ctx.send("Your invite data has been reset.")
 
 
-@bot.command(name="messages")
+@bot.command(name="messages", aliases=["m"])
 async def messages_command(ctx, member: discord.Member = None):
     """Show total message count of a user"""
     target = member or ctx.author
