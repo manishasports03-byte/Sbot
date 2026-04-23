@@ -2,6 +2,7 @@ import os
 import random
 import json
 import re
+import shutil
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
@@ -41,7 +42,8 @@ bot = commands.Bot(command_prefix=get_command_prefix, intents=intents, help_comm
 bad_words = ["mc", "bc", "madarchod", "bhosdike", "chutiya", "idiot", "stupid"]
 
 # ===== INVITE TRACKING CONFIG =====
-INVITE_DB_FILE = "invites.db"
+DATA_DB_FILE = "data.db"
+LEGACY_DB_FILE = "invites.db"
 db_connection = None
 server_invites = {}  # {guild_id: {invite_code: invite_object}}
 INVITE_UI_COLOR = discord.Color.from_str("#2b2d31")
@@ -106,11 +108,24 @@ def save_cash_data(data):
     with open(CASH_DATA_FILE, 'w') as f:
         json.dump(data, f, indent=2)
 
+def migrate_legacy_database():
+    """Copy legacy stats DB into the unified data.db file once."""
+    if os.path.exists(DATA_DB_FILE) or not os.path.exists(LEGACY_DB_FILE):
+        return
+
+    try:
+        shutil.copyfile(LEGACY_DB_FILE, DATA_DB_FILE)
+        print(f"Migrated legacy database from {LEGACY_DB_FILE} to {DATA_DB_FILE}")
+    except OSError as e:
+        print(f"Database migration error: {e}")
+
+
 def init_invite_database():
-    """Initialize SQLite database for invite tracking"""
+    """Initialize SQLite database for persistent bot stats"""
     global db_connection
     try:
-        db_connection = sqlite3.connect(INVITE_DB_FILE)
+        migrate_legacy_database()
+        db_connection = sqlite3.connect(DATA_DB_FILE)
         cursor = db_connection.cursor()
         
         # Create invite_stats table
@@ -356,6 +371,26 @@ def increment_message_count(guild_id, user_id):
     new_daily_total = stats["daily_messages"] + 1
     set_message_stats(guild_id, user_id, new_total, new_daily_total)
     return {"messages": new_total, "daily_messages": new_daily_total}
+
+
+def add_message(guild_id, user_id):
+    """Persist one newly observed message."""
+    return increment_message_count(guild_id, user_id)
+
+
+def get_messages(guild_id, user_id):
+    """Fetch persisted message totals for one user."""
+    return get_message_stats(guild_id, user_id)
+
+
+def reset_messages(guild_id, user_id):
+    """Reset persisted message totals for one user."""
+    reset_user_messages(guild_id, user_id)
+
+
+def leaderboard_messages(guild_id, column="messages", limit=10):
+    """Fetch the persisted message leaderboard."""
+    return get_message_leaderboard(guild_id, column=column, limit=limit)
 
 
 def clear_all_messages(guild_id):
@@ -1524,11 +1559,6 @@ async def on_member_join(member):
         # Update cached invites
         server_invites[guild.id] = {invite.code: invite for invite in current_invites}
         
-        # Track the invite
-        if guild.id not in invite_stats:
-            invite_stats[guild.id] = {}
-            inviter_map[guild.id] = {}
-        
         if used_invite and used_invite.inviter:
             # Update inviter stats
             inviter_id = used_invite.inviter.id
@@ -2397,7 +2427,7 @@ async def resetmyinvites_command(ctx):
 async def messages_command(ctx, member: discord.Member = None):
     """Show total message count of a user"""
     target = member or ctx.author
-    stats = get_message_stats(ctx.guild.id, target.id)
+    stats = get_messages(ctx.guild.id, target.id)
 
     embed = discord.Embed(
         title=f"{target.display_name}'s Messages",
@@ -2641,7 +2671,7 @@ async def leaderboard_command(ctx, category: str = None):
 
     if category in ["messages", "dailymessages"]:
         stat_column = "messages" if category == "messages" else "daily_messages"
-        leaderboard = get_message_leaderboard(ctx.guild.id, column=stat_column, limit=None)
+        leaderboard = leaderboard_messages(ctx.guild.id, column=stat_column, limit=None)
         title = "Messages Leaderboard" if category == "messages" else "Daily Messages Leaderboard"
 
         if not leaderboard:
@@ -2692,7 +2722,7 @@ async def on_message(message):
     # ===== SPAM DETECTION & PROTECTION =====
     if not message.author.bot and message.guild:
         if not is_message_channel_blacklisted(message.guild.id, message.channel.id):
-            increment_message_count(message.guild.id, message.author.id)
+            add_message(message.guild.id, message.author.id)
 
         # Check for spam
         spam_tracker[message.author.id].append(datetime.now(timezone.utc))
