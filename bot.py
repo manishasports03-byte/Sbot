@@ -2180,13 +2180,15 @@ async def serverinfo_command(ctx):
     verification_level = str(guild.verification_level).replace("_", " ")
 
     embed = discord.Embed(
-        description=guild.description or "No description set.",
+        description=f"📊 Server Information\n{guild.description or 'No description set.'}",
         color=color
     )
     embed.set_author(
         name=guild.name,
         icon_url=guild.icon.url if guild.icon else None
     )
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
 
     embed.add_field(
         name="📜 General Info",
@@ -2227,7 +2229,7 @@ async def serverinfo_command(ctx):
     )
 
     embed.set_footer(
-        text=f"Requested by {ctx.author} • {discord.utils.format_dt(datetime.now(timezone.utc), 't')}",
+        text=f"Requested by {ctx.author} • {discord.utils.format_dt(datetime.now(timezone.utc), 'f')}",
         icon_url=ctx.author.display_avatar.url
     )
     await ctx.send(embed=embed)
