@@ -243,6 +243,27 @@ def get_leaderboard(guild_id, limit=10):
         return []
 
 
+def clear_invite_data(guild_id):
+    """Clear all invite data for a guild"""
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute("DELETE FROM invite_stats WHERE guild_id = ?", (guild_id,))
+        cursor.execute("DELETE FROM inviter_map WHERE guild_id = ?", (guild_id,))
+        db_connection.commit()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+
+def reset_user_invites(guild_id, user_id):
+    """Reset invite count for one user"""
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute("DELETE FROM invite_stats WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
+        db_connection.commit()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+
 def get_state_value(key):
     try:
         cursor = db_connection.cursor()
@@ -2221,6 +2242,21 @@ async def removeinvites_command(ctx, member: discord.Member, amount: int):
     )
     embed.add_field(name="New Total", value=str(new_total))
     await ctx.send(embed=embed)
+
+
+@bot.command(name="clearinvites")
+@commands.has_permissions(administrator=True)
+async def clearinvites_command(ctx):
+    """Clear all invite data for the server"""
+    clear_invite_data(ctx.guild.id)
+    await ctx.send("Invite data cleared.")
+
+
+@bot.command(name="resetmyinvites")
+async def resetmyinvites_command(ctx):
+    """Reset the invoking user's invite data"""
+    reset_user_invites(ctx.guild.id, ctx.author.id)
+    await ctx.send("Your invite data has been reset.")
 
 
 @bot.command(name="messages")
