@@ -2,8 +2,7 @@ import os
 import random
 import json
 import re
-import shutil
-import sqlite3
+import asyncpg
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 import asyncio
@@ -19,16 +18,9 @@ BOT_START_TIME = datetime.now(timezone.utc)
 
 
 def get_command_prefix(bot_instance, message):
-    if not message.guild or not db_connection:
+    if not message.guild:
         return DEFAULT_PREFIX
-
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("SELECT prefix FROM guild_settings WHERE guild_id = ?", (message.guild.id,))
-        result = cursor.fetchone()
-        return result[0] if result and result[0] else DEFAULT_PREFIX
-    except sqlite3.Error:
-        return DEFAULT_PREFIX
+    return guild_prefix_cache.get(message.guild.id, DEFAULT_PREFIX)
 
 
 intents = discord.Intents.default()
@@ -42,9 +34,8 @@ bot = commands.Bot(command_prefix=get_command_prefix, intents=intents, help_comm
 bad_words = ["mc", "bc", "madarchod", "bhosdike", "chutiya", "idiot", "stupid"]
 
 # ===== INVITE TRACKING CONFIG =====
-DATA_DB_FILE = "data.db"
-LEGACY_DB_FILE = "invites.db"
-db_connection = None
+db = None
+guild_prefix_cache = {}
 server_invites = {}  # {guild_id: {invite_code: invite_object}}
 INVITE_UI_COLOR = discord.Color.from_str("#2b2d31")
 INVITED_PAGE_SIZE = 5
@@ -108,396 +99,345 @@ def save_cash_data(data):
     with open(CASH_DATA_FILE, 'w') as f:
         json.dump(data, f, indent=2)
 
-def migrate_legacy_database():
-    """Copy legacy stats DB into the unified data.db file once."""
-    if os.path.exists(DATA_DB_FILE) or not os.path.exists(LEGACY_DB_FILE):
+async def load_guild_prefixes():
+    """Load guild prefixes from PostgreSQL into cache."""
+    guild_prefix_cache.clear()
+    rows = await db.fetch("SELECT guild_id, prefix FROM guild_settings")
+    for row in rows:
+        guild_prefix_cache[row["guild_id"]] = row["prefix"] or DEFAULT_PREFIX
+
+
+async def init_database():
+    """Initialize PostgreSQL tables for persistent bot stats"""
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS invite_stats (
+            guild_id BIGINT,
+            user_id BIGINT,
+            invites INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS inviter_map (
+            guild_id BIGINT,
+            user_id BIGINT,
+            inviter_id BIGINT,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS message_stats (
+            guild_id BIGINT,
+            user_id BIGINT,
+            messages INTEGER DEFAULT 0,
+            daily_messages INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS message_blacklist (
+            guild_id BIGINT,
+            channel_id BIGINT,
+            PRIMARY KEY (guild_id, channel_id)
+        )
+    """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS bot_state (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS guild_settings (
+            guild_id BIGINT PRIMARY KEY,
+            prefix TEXT DEFAULT '.'
+        )
+    """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS afk_users (
+            guild_id BIGINT,
+            user_id BIGINT,
+            reason TEXT,
+            timestamp BIGINT,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    """)
+
+
+async def connect_db():
+    global db
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is not set")
+
+    if db is not None:
         return
 
-    try:
-        shutil.copyfile(LEGACY_DB_FILE, DATA_DB_FILE)
-        print(f"Migrated legacy database from {LEGACY_DB_FILE} to {DATA_DB_FILE}")
-    except OSError as e:
-        print(f"Database migration error: {e}")
+    db = await asyncpg.create_pool(database_url)
+    await init_database()
+    await load_guild_prefixes()
+    await load_afk_users()
+    print("Database initialized successfully")
+
+async def get_invites(guild_id, user_id):
+    """Get invite count for a user."""
+    return await db.fetchval(
+        "SELECT invites FROM invite_stats WHERE guild_id = $1 AND user_id = $2",
+        guild_id,
+        user_id,
+    ) or 0
 
 
-def init_invite_database():
-    """Initialize SQLite database for persistent bot stats"""
-    global db_connection
-    try:
-        migrate_legacy_database()
-        db_connection = sqlite3.connect(DATA_DB_FILE)
-        cursor = db_connection.cursor()
-        
-        # Create invite_stats table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS invite_stats (
-                guild_id INTEGER,
-                user_id INTEGER,
-                invites INTEGER DEFAULT 0,
-                PRIMARY KEY (guild_id, user_id)
-            )
-        """)
-        
-        # Create inviter_map table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS inviter_map (
-                guild_id INTEGER,
-                user_id INTEGER,
-                inviter_id INTEGER,
-                PRIMARY KEY (guild_id, user_id)
-            )
-        """)
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS message_stats (
-                guild_id INTEGER,
-                user_id INTEGER,
-                messages INTEGER DEFAULT 0,
-                daily_messages INTEGER DEFAULT 0,
-                PRIMARY KEY (guild_id, user_id)
-            )
-        """)
+async def add_invites(guild_id, user_id, amount):
+    """Add invites to a user."""
+    current = await get_invites(guild_id, user_id)
+    new_total = max(0, current + amount)
+    await db.execute(
+        """
+        INSERT INTO invite_stats (guild_id, user_id, invites)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id, user_id)
+        DO UPDATE SET invites = EXCLUDED.invites
+        """,
+        guild_id,
+        user_id,
+        new_total,
+    )
+    return new_total
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS message_blacklist (
-                guild_id INTEGER,
-                channel_id INTEGER,
-                PRIMARY KEY (guild_id, channel_id)
-            )
-        """)
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS bot_state (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-        """)
+async def set_inviter(guild_id, user_id, inviter_id):
+    """Set who invited a user."""
+    await db.execute(
+        """
+        INSERT INTO inviter_map (guild_id, user_id, inviter_id)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id, user_id)
+        DO UPDATE SET inviter_id = EXCLUDED.inviter_id
+        """,
+        guild_id,
+        user_id,
+        inviter_id,
+    )
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS guild_settings (
-                guild_id INTEGER PRIMARY KEY,
-                prefix TEXT DEFAULT '.'
-            )
-        """)
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS afk_users (
-                guild_id INTEGER,
-                user_id INTEGER,
-                reason TEXT,
-                timestamp INTEGER,
-                PRIMARY KEY (guild_id, user_id)
-            )
-        """)
-        
-        db_connection.commit()
-        print("✅ Database initialized successfully")
-    except sqlite3.Error as e:
-        print(f"❌ Database error: {e}")
+async def get_inviter(guild_id, user_id):
+    """Get who invited a user."""
+    return await db.fetchval(
+        "SELECT inviter_id FROM inviter_map WHERE guild_id = $1 AND user_id = $2",
+        guild_id,
+        user_id,
+    )
 
-def get_invites(guild_id, user_id):
-    """Get invite count for a user"""
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("SELECT invites FROM invite_stats WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
-        result = cursor.fetchone()
-        return result[0] if result else 0
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-        return 0
 
-def add_invites(guild_id, user_id, amount):
-    """Add invites to a user"""
-    try:
-        cursor = db_connection.cursor()
-        current = get_invites(guild_id, user_id)
-        new_total = max(0, current + amount)
-        cursor.execute(
-            "INSERT OR REPLACE INTO invite_stats (guild_id, user_id, invites) VALUES (?, ?, ?)",
-            (guild_id, user_id, new_total)
+async def get_invited_users(guild_id, inviter_id):
+    """Get list of users invited by someone."""
+    rows = await db.fetch(
+        "SELECT user_id FROM inviter_map WHERE guild_id = $1 AND inviter_id = $2 ORDER BY user_id",
+        guild_id,
+        inviter_id,
+    )
+    return [row["user_id"] for row in rows]
+
+
+async def get_leaderboard(guild_id, limit=10):
+    """Get top inviters for a guild."""
+    if limit is None:
+        rows = await db.fetch(
+            "SELECT user_id, invites FROM invite_stats WHERE guild_id = $1 ORDER BY invites DESC, user_id ASC",
+            guild_id,
         )
-        db_connection.commit()
-        return new_total
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-        return current
-
-def set_inviter(guild_id, user_id, inviter_id):
-    """Set who invited a user"""
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO inviter_map (guild_id, user_id, inviter_id) VALUES (?, ?, ?)",
-            (guild_id, user_id, inviter_id)
+    else:
+        rows = await db.fetch(
+            "SELECT user_id, invites FROM invite_stats WHERE guild_id = $1 ORDER BY invites DESC, user_id ASC LIMIT $2",
+            guild_id,
+            limit,
         )
-        db_connection.commit()
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-
-def get_inviter(guild_id, user_id):
-    """Get who invited a user"""
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("SELECT inviter_id FROM inviter_map WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
-        result = cursor.fetchone()
-        return result[0] if result else None
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-        return None
-
-def get_invited_users(guild_id, inviter_id):
-    """Get list of users invited by someone"""
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("SELECT user_id FROM inviter_map WHERE guild_id = ? AND inviter_id = ?", (guild_id, inviter_id))
-        return [row[0] for row in cursor.fetchall()]
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-        return []
-
-def get_leaderboard(guild_id, limit=10):
-    """Get top inviters for a guild"""
-    try:
-        cursor = db_connection.cursor()
-        if limit is None:
-            cursor.execute(
-                "SELECT user_id, invites FROM invite_stats WHERE guild_id = ? ORDER BY invites DESC",
-                (guild_id,)
-            )
-        else:
-            cursor.execute(
-                "SELECT user_id, invites FROM invite_stats WHERE guild_id = ? ORDER BY invites DESC LIMIT ?",
-                (guild_id, limit)
-            )
-        return cursor.fetchall()
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-        return []
+    return [(row["user_id"], row["invites"]) for row in rows]
 
 
-def clear_invite_data(guild_id):
-    """Clear all invite data for a guild"""
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("DELETE FROM invite_stats WHERE guild_id = ?", (guild_id,))
-        cursor.execute("DELETE FROM inviter_map WHERE guild_id = ?", (guild_id,))
-        db_connection.commit()
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+async def clear_invite_data(guild_id):
+    """Clear all invite data for a guild."""
+    await db.execute("DELETE FROM invite_stats WHERE guild_id = $1", guild_id)
+    await db.execute("DELETE FROM inviter_map WHERE guild_id = $1", guild_id)
 
 
-def reset_user_invites(guild_id, user_id):
-    """Reset invite count for one user"""
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("DELETE FROM invite_stats WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
-        db_connection.commit()
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+async def reset_user_invites(guild_id, user_id):
+    """Reset invite count for one user."""
+    await db.execute(
+        "DELETE FROM invite_stats WHERE guild_id = $1 AND user_id = $2",
+        guild_id,
+        user_id,
+    )
 
 
-def get_state_value(key):
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("SELECT value FROM bot_state WHERE key = ?", (key,))
-        result = cursor.fetchone()
-        return result[0] if result else None
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-        return None
+async def get_state_value(key):
+    return await db.fetchval("SELECT value FROM bot_state WHERE key = $1", key)
 
 
-def set_state_value(key, value):
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO bot_state (key, value) VALUES (?, ?)",
-            (key, value)
-        )
-        db_connection.commit()
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+async def set_state_value(key, value):
+    await db.execute(
+        """
+        INSERT INTO bot_state (key, value)
+        VALUES ($1, $2)
+        ON CONFLICT (key)
+        DO UPDATE SET value = EXCLUDED.value
+        """,
+        key,
+        value,
+    )
 
 
-def reset_daily_message_counts_if_needed():
+async def reset_daily_message_counts_if_needed():
     today = datetime.now(timezone.utc).date().isoformat()
-    last_reset = get_state_value(MESSAGE_DAILY_RESET_KEY)
+    last_reset = await get_state_value(MESSAGE_DAILY_RESET_KEY)
     if last_reset == today:
         return
 
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("UPDATE message_stats SET daily_messages = 0")
-        db_connection.commit()
-        set_state_value(MESSAGE_DAILY_RESET_KEY, today)
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+    await db.execute("UPDATE message_stats SET daily_messages = 0")
+    await set_state_value(MESSAGE_DAILY_RESET_KEY, today)
 
 
-def get_message_stats(guild_id, user_id):
-    try:
-        reset_daily_message_counts_if_needed()
-        cursor = db_connection.cursor()
-        cursor.execute(
-            "SELECT messages, daily_messages FROM message_stats WHERE guild_id = ? AND user_id = ?",
-            (guild_id, user_id)
-        )
-        result = cursor.fetchone()
-        if result:
-            return {"messages": result[0], "daily_messages": result[1]}
-        return {"messages": 0, "daily_messages": 0}
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-        return {"messages": 0, "daily_messages": 0}
+async def get_message_stats(guild_id, user_id):
+    await reset_daily_message_counts_if_needed()
+    row = await db.fetchrow(
+        "SELECT messages, daily_messages FROM message_stats WHERE guild_id = $1 AND user_id = $2",
+        guild_id,
+        user_id,
+    )
+    if row:
+        return {"messages": row["messages"], "daily_messages": row["daily_messages"]}
+    return {"messages": 0, "daily_messages": 0}
 
 
-def set_message_stats(guild_id, user_id, messages, daily_messages):
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO message_stats (guild_id, user_id, messages, daily_messages)
-            VALUES (?, ?, ?, ?)
-            """,
-            (guild_id, user_id, max(0, messages), max(0, daily_messages))
-        )
-        db_connection.commit()
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+async def set_message_stats(guild_id, user_id, messages, daily_messages):
+    await db.execute(
+        """
+        INSERT INTO message_stats (guild_id, user_id, messages, daily_messages)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (guild_id, user_id)
+        DO UPDATE SET
+            messages = EXCLUDED.messages,
+            daily_messages = EXCLUDED.daily_messages
+        """,
+        guild_id,
+        user_id,
+        max(0, messages),
+        max(0, daily_messages),
+    )
 
 
-def add_messages(guild_id, user_id, amount, update_daily=False):
-    stats = get_message_stats(guild_id, user_id)
+async def add_messages(guild_id, user_id, amount, update_daily=False):
+    stats = await get_message_stats(guild_id, user_id)
     new_total = max(0, stats["messages"] + amount)
     daily_change = amount if update_daily and amount > 0 else 0
     new_daily_total = max(0, stats["daily_messages"] + daily_change)
-    set_message_stats(guild_id, user_id, new_total, new_daily_total)
+    await set_message_stats(guild_id, user_id, new_total, new_daily_total)
     return {"messages": new_total, "daily_messages": new_daily_total}
 
 
-def increment_message_count(guild_id, user_id):
-    stats = get_message_stats(guild_id, user_id)
+async def increment_message_count(guild_id, user_id):
+    stats = await get_message_stats(guild_id, user_id)
     new_total = stats["messages"] + 1
     new_daily_total = stats["daily_messages"] + 1
-    set_message_stats(guild_id, user_id, new_total, new_daily_total)
+    await set_message_stats(guild_id, user_id, new_total, new_daily_total)
     return {"messages": new_total, "daily_messages": new_daily_total}
 
 
-def add_message(guild_id, user_id):
+async def add_message(guild_id, user_id):
     """Persist one newly observed message."""
-    return increment_message_count(guild_id, user_id)
+    return await increment_message_count(guild_id, user_id)
 
 
-def get_messages(guild_id, user_id):
+async def get_messages(guild_id, user_id):
     """Fetch persisted message totals for one user."""
-    return get_message_stats(guild_id, user_id)
+    return await get_message_stats(guild_id, user_id)
 
 
-def reset_messages(guild_id, user_id):
+async def reset_messages(guild_id, user_id):
     """Reset persisted message totals for one user."""
-    reset_user_messages(guild_id, user_id)
+    await reset_user_messages(guild_id, user_id)
 
 
-def leaderboard_messages(guild_id, column="messages", limit=10):
+async def leaderboard_messages(guild_id, column="messages", limit=10):
     """Fetch the persisted message leaderboard."""
-    return get_message_leaderboard(guild_id, column=column, limit=limit)
+    return await get_message_leaderboard(guild_id, column=column, limit=limit)
 
 
-def clear_all_messages(guild_id):
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("DELETE FROM message_stats WHERE guild_id = ?", (guild_id,))
-        db_connection.commit()
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+async def clear_all_messages(guild_id):
+    await db.execute("DELETE FROM message_stats WHERE guild_id = $1", guild_id)
 
 
-def reset_user_messages(guild_id, user_id):
-    set_message_stats(guild_id, user_id, 0, 0)
+async def reset_user_messages(guild_id, user_id):
+    await set_message_stats(guild_id, user_id, 0, 0)
 
 
-def get_message_leaderboard(guild_id, column="messages", limit=10):
+async def get_message_leaderboard(guild_id, column="messages", limit=10):
     if column not in {"messages", "daily_messages"}:
         return []
 
-    try:
-        reset_daily_message_counts_if_needed()
-        cursor = db_connection.cursor()
-        if limit is None:
-            cursor.execute(
-                f"""
-                SELECT user_id, {column}
-                FROM message_stats
-                WHERE guild_id = ? AND {column} > 0
-                ORDER BY {column} DESC
-                """,
-                (guild_id,)
-            )
-        else:
-            cursor.execute(
-                f"""
-                SELECT user_id, {column}
-                FROM message_stats
-                WHERE guild_id = ? AND {column} > 0
-                ORDER BY {column} DESC
-                LIMIT ?
-                """,
-                (guild_id, limit)
-            )
-        return cursor.fetchall()
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-        return []
-
-
-def blacklist_message_channel(guild_id, channel_id):
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO message_blacklist (guild_id, channel_id) VALUES (?, ?)",
-            (guild_id, channel_id)
+    await reset_daily_message_counts_if_needed()
+    if limit is None:
+        rows = await db.fetch(
+            f"""
+            SELECT user_id, {column}
+            FROM message_stats
+            WHERE guild_id = $1 AND {column} > 0
+            ORDER BY {column} DESC, user_id ASC
+            """,
+            guild_id,
         )
-        db_connection.commit()
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-
-
-def unblacklist_message_channel(guild_id, channel_id):
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute(
-            "DELETE FROM message_blacklist WHERE guild_id = ? AND channel_id = ?",
-            (guild_id, channel_id)
+    else:
+        rows = await db.fetch(
+            f"""
+            SELECT user_id, {column}
+            FROM message_stats
+            WHERE guild_id = $1 AND {column} > 0
+            ORDER BY {column} DESC, user_id ASC
+            LIMIT $2
+            """,
+            guild_id,
+            limit,
         )
-        db_connection.commit()
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+    return [(row["user_id"], row[column]) for row in rows]
 
 
-def get_blacklisted_channels(guild_id):
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute(
-            "SELECT channel_id FROM message_blacklist WHERE guild_id = ? ORDER BY channel_id",
-            (guild_id,)
+async def blacklist_message_channel(guild_id, channel_id):
+    await db.execute(
+        """
+        INSERT INTO message_blacklist (guild_id, channel_id)
+        VALUES ($1, $2)
+        ON CONFLICT (guild_id, channel_id) DO NOTHING
+        """,
+        guild_id,
+        channel_id,
+    )
+
+
+async def unblacklist_message_channel(guild_id, channel_id):
+    await db.execute(
+        "DELETE FROM message_blacklist WHERE guild_id = $1 AND channel_id = $2",
+        guild_id,
+        channel_id,
+    )
+
+
+async def get_blacklisted_channels(guild_id):
+    rows = await db.fetch(
+        "SELECT channel_id FROM message_blacklist WHERE guild_id = $1 ORDER BY channel_id",
+        guild_id,
+    )
+    return [row["channel_id"] for row in rows]
+
+
+async def is_message_channel_blacklisted(guild_id, channel_id):
+    return bool(
+        await db.fetchval(
+            "SELECT 1 FROM message_blacklist WHERE guild_id = $1 AND channel_id = $2",
+            guild_id,
+            channel_id,
         )
-        return [row[0] for row in cursor.fetchall()]
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-        return []
-
-
-def is_message_channel_blacklisted(guild_id, channel_id):
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute(
-            "SELECT 1 FROM message_blacklist WHERE guild_id = ? AND channel_id = ?",
-            (guild_id, channel_id)
-        )
-        return cursor.fetchone() is not None
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-        return False
+    )
 
 
 def build_messages_embed(ctx, title, description):
@@ -518,39 +458,36 @@ def build_messages_usage_embed(ctx, command_name, usage):
     )
 
 
-def set_guild_prefix(guild_id, prefix):
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO guild_settings (guild_id, prefix) VALUES (?, ?)",
-            (guild_id, prefix)
+async def set_guild_prefix(guild_id, prefix):
+    await db.execute(
+        """
+        INSERT INTO guild_settings (guild_id, prefix)
+        VALUES ($1, $2)
+        ON CONFLICT (guild_id)
+        DO UPDATE SET prefix = EXCLUDED.prefix
+        """,
+        guild_id,
+        prefix,
+    )
+    guild_prefix_cache[guild_id] = prefix
+
+
+async def delete_guild_prefix(guild_id):
+    await db.execute("DELETE FROM guild_settings WHERE guild_id = $1", guild_id)
+    guild_prefix_cache.pop(guild_id, None)
+
+
+async def get_guild_prefix(guild_id):
+    if db is None:
+        return DEFAULT_PREFIX
+
+    return (
+        await db.fetchval(
+            "SELECT prefix FROM guild_settings WHERE guild_id = $1",
+            guild_id,
         )
-        db_connection.commit()
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-
-
-def delete_guild_prefix(guild_id):
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("DELETE FROM guild_settings WHERE guild_id = ?", (guild_id,))
-        db_connection.commit()
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-
-
-def get_guild_prefix(guild_id):
-    if not db_connection:
-        return DEFAULT_PREFIX
-
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("SELECT prefix FROM guild_settings WHERE guild_id = ?", (guild_id,))
-        result = cursor.fetchone()
-        return result[0] if result and result[0] else DEFAULT_PREFIX
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-        return DEFAULT_PREFIX
+        or DEFAULT_PREFIX
+    )
 
 
 def format_relative_duration(from_dt):
@@ -662,66 +599,53 @@ def cache_afk_state(guild_id, user_id, reason, timestamp, pings=None):
     return afk_users[afk_cache_key(guild_id, user_id)]
 
 
-def save_afk_state(guild_id, user_id, reason, timestamp):
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO afk_users (guild_id, user_id, reason, timestamp)
-            VALUES (?, ?, ?, ?)
-            """,
-            (guild_id, user_id, reason, timestamp)
-        )
-        db_connection.commit()
-        return cache_afk_state(guild_id, user_id, reason, timestamp)
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-        return None
+async def save_afk_state(guild_id, user_id, reason, timestamp):
+    await db.execute(
+        """
+        INSERT INTO afk_users (guild_id, user_id, reason, timestamp)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (guild_id, user_id)
+        DO UPDATE SET
+            reason = EXCLUDED.reason,
+            timestamp = EXCLUDED.timestamp
+        """,
+        guild_id,
+        user_id,
+        reason,
+        timestamp,
+    )
+    return cache_afk_state(guild_id, user_id, reason, timestamp)
 
 
-def get_afk_state(guild_id, user_id):
+async def get_afk_state(guild_id, user_id):
     key = afk_cache_key(guild_id, user_id)
     if key in afk_users:
         return afk_users[key]
 
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute(
-            "SELECT reason, timestamp FROM afk_users WHERE guild_id = ? AND user_id = ?",
-            (guild_id, user_id)
-        )
-        result = cursor.fetchone()
-        if not result:
-            return None
-        reason, timestamp = result
-        return cache_afk_state(guild_id, user_id, reason, timestamp)
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+    row = await db.fetchrow(
+        "SELECT reason, timestamp FROM afk_users WHERE guild_id = $1 AND user_id = $2",
+        guild_id,
+        user_id,
+    )
+    if not row:
         return None
+    return cache_afk_state(guild_id, user_id, row["reason"], row["timestamp"])
 
 
-def delete_afk_state(guild_id, user_id):
+async def delete_afk_state(guild_id, user_id):
     afk_users.pop(afk_cache_key(guild_id, user_id), None)
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute(
-            "DELETE FROM afk_users WHERE guild_id = ? AND user_id = ?",
-            (guild_id, user_id)
-        )
-        db_connection.commit()
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+    await db.execute(
+        "DELETE FROM afk_users WHERE guild_id = $1 AND user_id = $2",
+        guild_id,
+        user_id,
+    )
 
 
-def load_afk_users():
+async def load_afk_users():
     afk_users.clear()
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("SELECT guild_id, user_id, reason, timestamp FROM afk_users")
-        for guild_id, user_id, reason, timestamp in cursor.fetchall():
-            cache_afk_state(guild_id, user_id, reason, timestamp)
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+    rows = await db.fetch("SELECT guild_id, user_id, reason, timestamp FROM afk_users")
+    for row in rows:
+        cache_afk_state(row["guild_id"], row["user_id"], row["reason"], row["timestamp"])
 
 
 def format_duration(started_at):
@@ -921,7 +845,7 @@ async def set_afk(member, reason=None):
     else:
         afk_name = f"[AFK] {display_name}"
 
-    save_afk_state(member.guild.id, member.id, reason, timestamp)
+    await save_afk_state(member.guild.id, member.id, reason, timestamp)
 
     if member.id == member.guild.owner_id:
         return
@@ -933,11 +857,11 @@ async def set_afk(member, reason=None):
 
 
 async def remove_afk(member):
-    afk_data = get_afk_state(member.guild.id, member.id)
+    afk_data = await get_afk_state(member.guild.id, member.id)
     if not afk_data:
         return None
 
-    delete_afk_state(member.guild.id, member.id)
+    await delete_afk_state(member.guild.id, member.id)
 
     if member.id != member.guild.owner_id:
         try:
@@ -1355,8 +1279,8 @@ def format_invite_request_timestamp():
     return datetime.now().strftime("%d %b %Y %I:%M %p")
 
 
-def get_invite_ui_stats(guild_id, user_id):
-    invites_count = get_invites(guild_id, user_id)
+async def get_invite_ui_stats(guild_id, user_id):
+    invites_count = await get_invites(guild_id, user_id)
     return {
         "invites": invites_count,
         "joins": invites_count,
@@ -1366,8 +1290,8 @@ def get_invite_ui_stats(guild_id, user_id):
     }
 
 
-def build_invites_embed(ctx, target):
-    stats = get_invite_ui_stats(ctx.guild.id, target.id)
+async def build_invites_embed(ctx, target):
+    stats = await get_invite_ui_stats(ctx.guild.id, target.id)
     embed = discord.Embed(
         title="Invite log",
         color=INVITE_UI_COLOR,
@@ -1581,7 +1505,7 @@ async def rotate_activity():
 
 @tasks.loop(minutes=5)
 async def reset_daily_messages_loop():
-    reset_daily_message_counts_if_needed()
+    await reset_daily_message_counts_if_needed()
 
 
 @bot.event
@@ -1590,9 +1514,8 @@ async def on_ready():
     print(f"Logged in as {bot.user}")
     
     # Initialize database
-    init_invite_database()
-    load_afk_users()
-    reset_daily_message_counts_if_needed()
+    await connect_db()
+    await reset_daily_message_counts_if_needed()
     
     # Cache all server invites
     for guild in bot.guilds:
@@ -1662,8 +1585,8 @@ async def on_member_join(member):
             inviter_id = used_invite.inviter.id
             
             # Update database
-            add_invites(guild.id, inviter_id, 1)
-            set_inviter(guild.id, member.id, inviter_id)
+            await add_invites(guild.id, inviter_id, 1)
+            await set_inviter(guild.id, member.id, inviter_id)
             
     except discord.Forbidden:
         pass
@@ -2055,7 +1978,7 @@ async def setprefix_command(ctx, *, new_prefix: str):
         await ctx.send("Prefix must be between 1 and 5 characters.")
         return
 
-    set_guild_prefix(ctx.guild.id, new_prefix)
+    await set_guild_prefix(ctx.guild.id, new_prefix)
     await ctx.send(embed=discord.Embed(
         title="Prefix Updated",
         description=f"New prefix: `{new_prefix}`",
@@ -2071,7 +1994,7 @@ async def deleteprefix_command(ctx):
         await ctx.send("This command can only be used in a server.")
         return
 
-    delete_guild_prefix(ctx.guild.id)
+    await delete_guild_prefix(ctx.guild.id)
     await ctx.send(embed=discord.Embed(
         title="Prefix Reset",
         description=f"Prefix reset to `{DEFAULT_PREFIX}`",
@@ -2384,7 +2307,7 @@ async def invites_command(ctx, member: discord.Member = None):
     """Show number of invites of a user"""
     target = member or ctx.author
 
-    await ctx.send(embed=build_invites_embed(ctx, target))
+    await ctx.send(embed=await build_invites_embed(ctx, target))
 
 
 @bot.command(name="inviter")
@@ -2392,7 +2315,7 @@ async def inviter_command(ctx, member: discord.Member = None):
     """Show who invited the user"""
     target = member or ctx.author
     
-    inviter_id = get_inviter(ctx.guild.id, target.id)
+    inviter_id = await get_inviter(ctx.guild.id, target.id)
     if not inviter_id:
         await ctx.send(f"Could not find who invited {target.display_name}.")
         return
@@ -2418,7 +2341,7 @@ async def invited_command(ctx, member: discord.Member = None):
     """List users invited by someone"""
     target = member or ctx.author
 
-    invited_users = get_invited_users(ctx.guild.id, target.id)
+    invited_users = await get_invited_users(ctx.guild.id, target.id)
 
     entries = []
     for uid in invited_users:
@@ -2476,7 +2399,7 @@ async def addinvites_command(ctx, member: discord.Member, amount: int):
         await ctx.send("Please specify a positive amount.")
         return
     
-    new_total = add_invites(ctx.guild.id, member.id, amount)
+    new_total = await add_invites(ctx.guild.id, member.id, amount)
     
     embed = discord.Embed(
         title="➕ Invites Added",
@@ -2495,7 +2418,7 @@ async def removeinvites_command(ctx, member: discord.Member, amount: int):
         await ctx.send("Please specify a positive amount.")
         return
     
-    new_total = add_invites(ctx.guild.id, member.id, -amount)
+    new_total = await add_invites(ctx.guild.id, member.id, -amount)
     
     embed = discord.Embed(
         title="➖ Invites Removed",
@@ -2510,14 +2433,14 @@ async def removeinvites_command(ctx, member: discord.Member, amount: int):
 @commands.has_permissions(administrator=True)
 async def clearinvites_command(ctx):
     """Clear all invite data for the server"""
-    clear_invite_data(ctx.guild.id)
+    await clear_invite_data(ctx.guild.id)
     await ctx.send("Invite data cleared.")
 
 
 @bot.command(name="resetmyinvites")
 async def resetmyinvites_command(ctx):
     """Reset the invoking user's invite data"""
-    reset_user_invites(ctx.guild.id, ctx.author.id)
+    await reset_user_invites(ctx.guild.id, ctx.author.id)
     await ctx.send("Your invite data has been reset.")
 
 
@@ -2525,7 +2448,7 @@ async def resetmyinvites_command(ctx):
 async def messages_command(ctx, member: discord.Member = None):
     """Show total message count of a user"""
     target = member or ctx.author
-    stats = get_messages(ctx.guild.id, target.id)
+    stats = await get_messages(ctx.guild.id, target.id)
 
     embed = discord.Embed(
         title=f"{target.display_name}'s Messages",
@@ -2560,7 +2483,7 @@ async def addmessages_command(ctx, member: discord.Member, amount: int):
         ))
         return
 
-    add_messages(ctx.guild.id, member.id, amount)
+    await add_messages(ctx.guild.id, member.id, amount)
 
     embed = build_messages_embed(
         ctx,
@@ -2582,7 +2505,7 @@ async def removemessages_command(ctx, member: discord.Member, amount: int):
         ))
         return
 
-    add_messages(ctx.guild.id, member.id, -amount)
+    await add_messages(ctx.guild.id, member.id, -amount)
 
     embed = build_messages_embed(
         ctx,
@@ -2596,7 +2519,7 @@ async def removemessages_command(ctx, member: discord.Member, amount: int):
 @commands.has_permissions(administrator=True)
 async def blacklistchannel_command(ctx, channel: discord.TextChannel):
     """Do not count messages from this channel"""
-    blacklist_message_channel(ctx.guild.id, channel.id)
+    await blacklist_message_channel(ctx.guild.id, channel.id)
     await ctx.send(embed=build_messages_embed(
         ctx,
         "Message blacklisted channels",
@@ -2608,7 +2531,7 @@ async def blacklistchannel_command(ctx, channel: discord.TextChannel):
 @commands.has_permissions(administrator=True)
 async def unblacklistchannel_command(ctx, channel: discord.TextChannel):
     """Remove a channel from the message blacklist"""
-    unblacklist_message_channel(ctx.guild.id, channel.id)
+    await unblacklist_message_channel(ctx.guild.id, channel.id)
     await ctx.send(embed=build_messages_embed(
         ctx,
         "Message blacklisted channels",
@@ -2619,7 +2542,7 @@ async def unblacklistchannel_command(ctx, channel: discord.TextChannel):
 @bot.command(name="blacklistedchannels")
 async def blacklistedchannels_command(ctx):
     """Show all blacklisted channels"""
-    channel_ids = get_blacklisted_channels(ctx.guild.id)
+    channel_ids = await get_blacklisted_channels(ctx.guild.id)
     if not channel_ids:
         await ctx.send(embed=build_messages_embed(
             ctx,
@@ -2645,7 +2568,7 @@ async def blacklistedchannels_command(ctx):
 @commands.has_permissions(administrator=True)
 async def clearmessages_command(ctx):
     """Reset all message data in server"""
-    clear_all_messages(ctx.guild.id)
+    await clear_all_messages(ctx.guild.id)
     await ctx.send(embed=build_messages_embed(
         ctx,
         "Success",
@@ -2656,7 +2579,7 @@ async def clearmessages_command(ctx):
 @bot.command(name="resetmymessages")
 async def resetmymessages_command(ctx):
     """Reset own message count"""
-    reset_user_messages(ctx.guild.id, ctx.author.id)
+    await reset_user_messages(ctx.guild.id, ctx.author.id)
     await ctx.send(embed=build_messages_embed(
         ctx,
         "Success",
@@ -2739,7 +2662,7 @@ async def leaderboard_command(ctx, category: str = None):
         return
 
     if category in ["invites", "inv"]:
-        leaderboard = get_leaderboard(ctx.guild.id, limit=None)
+        leaderboard = await get_leaderboard(ctx.guild.id, limit=None)
 
         if not leaderboard:
             embed = discord.Embed(
@@ -2769,7 +2692,7 @@ async def leaderboard_command(ctx, category: str = None):
 
     if category in ["messages", "dailymessages"]:
         stat_column = "messages" if category == "messages" else "daily_messages"
-        leaderboard = leaderboard_messages(ctx.guild.id, column=stat_column, limit=None)
+        leaderboard = await leaderboard_messages(ctx.guild.id, column=stat_column, limit=None)
         title = "Messages Leaderboard" if category == "messages" else "Daily Messages Leaderboard"
 
         if not leaderboard:
@@ -2819,8 +2742,8 @@ async def on_message(message):
     
     # ===== SPAM DETECTION & PROTECTION =====
     if not message.author.bot and message.guild:
-        if not is_message_channel_blacklisted(message.guild.id, message.channel.id):
-            add_message(message.guild.id, message.author.id)
+        if not await is_message_channel_blacklisted(message.guild.id, message.channel.id):
+            await add_message(message.guild.id, message.author.id)
 
         # Check for spam
         spam_tracker[message.author.id].append(datetime.now(timezone.utc))
@@ -2928,7 +2851,7 @@ async def on_message(message):
         return
 
     if message.guild:
-        afk_data = get_afk_state(message.guild.id, message.author.id)
+        afk_data = await get_afk_state(message.guild.id, message.author.id)
     else:
         afk_data = None
 
@@ -2960,7 +2883,7 @@ async def on_message(message):
         return
 
     for mentioned_user in message.mentions:
-        afk_data = get_afk_state(message.guild.id, mentioned_user.id) if message.guild else None
+        afk_data = await get_afk_state(message.guild.id, mentioned_user.id) if message.guild else None
         if afk_data:
             afk_duration = format_duration(afk_data["since"])
             reason_text = format_afk_reason(afk_data.get("reason"))
