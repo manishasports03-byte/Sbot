@@ -179,6 +179,16 @@ def init_invite_database():
                 prefix TEXT DEFAULT '.'
             )
         """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS afk_users (
+                guild_id INTEGER,
+                user_id INTEGER,
+                reason TEXT,
+                timestamp INTEGER,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        """)
         
         db_connection.commit()
         print("✅ Database initialized successfully")
@@ -633,6 +643,87 @@ afk_users = {}
 MAX_AFK_PINGS_TO_SHOW = 5
 
 
+def afk_cache_key(guild_id, user_id):
+    return (guild_id, user_id)
+
+
+def strip_afk_prefix(name):
+    if not name:
+        return name
+    return name[6:] if name.startswith("[AFK] ") else name
+
+
+def cache_afk_state(guild_id, user_id, reason, timestamp, pings=None):
+    afk_users[afk_cache_key(guild_id, user_id)] = {
+        "since": datetime.fromtimestamp(timestamp, tz=timezone.utc),
+        "pings": list(pings or []),
+        "reason": reason,
+    }
+    return afk_users[afk_cache_key(guild_id, user_id)]
+
+
+def save_afk_state(guild_id, user_id, reason, timestamp):
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO afk_users (guild_id, user_id, reason, timestamp)
+            VALUES (?, ?, ?, ?)
+            """,
+            (guild_id, user_id, reason, timestamp)
+        )
+        db_connection.commit()
+        return cache_afk_state(guild_id, user_id, reason, timestamp)
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return None
+
+
+def get_afk_state(guild_id, user_id):
+    key = afk_cache_key(guild_id, user_id)
+    if key in afk_users:
+        return afk_users[key]
+
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "SELECT reason, timestamp FROM afk_users WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id)
+        )
+        result = cursor.fetchone()
+        if not result:
+            return None
+        reason, timestamp = result
+        return cache_afk_state(guild_id, user_id, reason, timestamp)
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return None
+
+
+def delete_afk_state(guild_id, user_id):
+    afk_users.pop(afk_cache_key(guild_id, user_id), None)
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "DELETE FROM afk_users WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id)
+        )
+        db_connection.commit()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+
+def load_afk_users():
+    afk_users.clear()
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute("SELECT guild_id, user_id, reason, timestamp FROM afk_users")
+        for guild_id, user_id, reason, timestamp in cursor.fetchall():
+            cache_afk_state(guild_id, user_id, reason, timestamp)
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+
 def format_duration(started_at):
     total_seconds = int((datetime.now(timezone.utc) - started_at).total_seconds())
     total_seconds = max(total_seconds, 0)
@@ -822,33 +913,39 @@ class RenameChannelModal(discord.ui.Modal, title="Rename Voice Channel"):
 
 
 async def set_afk(member, reason=None):
-    original_nick = member.nick
     display_name = member.display_name
+    timestamp = int(datetime.now(timezone.utc).timestamp())
 
     if display_name.startswith("[AFK] "):
         afk_name = display_name
     else:
         afk_name = f"[AFK] {display_name}"
 
-    if member.id != member.guild.owner_id:
-        await member.edit(nick=afk_name[:32], reason="User set AFK")
+    save_afk_state(member.guild.id, member.id, reason, timestamp)
 
-    afk_users[member.id] = {
-        "nick": original_nick,
-        "since": datetime.now(timezone.utc),
-        "pings": [],
-        "reason": reason,
-    }
+    if member.id == member.guild.owner_id:
+        return
+
+    try:
+        await member.edit(nick=afk_name[:32], reason="User set AFK")
+    except (discord.Forbidden, discord.HTTPException):
+        pass
 
 
 async def remove_afk(member):
-    if member.id not in afk_users:
+    afk_data = get_afk_state(member.guild.id, member.id)
+    if not afk_data:
         return None
 
-    afk_data = afk_users.pop(member.id)
+    delete_afk_state(member.guild.id, member.id)
 
     if member.id != member.guild.owner_id:
-        await member.edit(nick=afk_data["nick"], reason="User returned from AFK")
+        try:
+            new_nick = strip_afk_prefix(member.nick) if member.nick else None
+            if new_nick != member.nick:
+                await member.edit(nick=new_nick[:32] if new_nick else None, reason="User returned from AFK")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
     return afk_data
 
@@ -1494,6 +1591,7 @@ async def on_ready():
     
     # Initialize database
     init_invite_database()
+    load_afk_users()
     reset_daily_message_counts_if_needed()
     
     # Cache all server invites
@@ -2829,37 +2927,26 @@ async def on_message(message):
         )
         return
 
-    if message.guild and message.author.id in afk_users:
-        afk_data = afk_users[message.author.id]
+    if message.guild:
+        afk_data = get_afk_state(message.guild.id, message.author.id)
+    else:
+        afk_data = None
+
+    if afk_data:
         afk_duration = format_duration(afk_data["since"])
         reason_text = format_afk_reason(afk_data.get("reason"))
         ping_summary = format_afk_pings(afk_data["pings"])
-
-        try:
-            afk_data = await remove_afk(message.author)
-            afk_duration = format_duration(afk_data["since"])
-            reason_text = format_afk_reason(afk_data.get("reason"))
-            ping_summary = format_afk_pings(afk_data["pings"])
-            await message.channel.send(
-                f"Welcome back {message.author.mention}, you were AFK for {afk_duration}."
-                f"{reason_text}\n"
+        await remove_afk(message.author)
+        embed = discord.Embed(
+            title="AFK",
+            description=(
+                f"{message.author.display_name} is no longer AFK\n\n"
+                f"AFK for {afk_duration}.{reason_text}\n"
                 f"{ping_summary}"
-            )
-        except discord.Forbidden:
-            afk_users.pop(message.author.id, None)
-            await message.channel.send(
-                f"Welcome back {message.author.mention}, you were AFK for {afk_duration}. "
-                "I could not restore your nickname.\n"
-                f"{reason_text}\n"
-                f"{ping_summary}"
-            )
-        except discord.HTTPException:
-            await message.channel.send(
-                f"Welcome back {message.author.mention}, you were AFK for {afk_duration}. "
-                "I could not restore your nickname right now.\n"
-                f"{reason_text}\n"
-                f"{ping_summary}"
-            )
+            ),
+            color=discord.Color.from_str("#2b2d31")
+        )
+        await message.channel.send(embed=embed)
 
     for word in bad_words:
         if word in msg:
@@ -2873,8 +2960,8 @@ async def on_message(message):
         return
 
     for mentioned_user in message.mentions:
-        if mentioned_user.id in afk_users:
-            afk_data = afk_users[mentioned_user.id]
+        afk_data = get_afk_state(message.guild.id, mentioned_user.id) if message.guild else None
+        if afk_data:
             afk_duration = format_duration(afk_data["since"])
             reason_text = format_afk_reason(afk_data.get("reason"))
             afk_data["pings"].append(
