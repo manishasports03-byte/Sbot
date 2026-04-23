@@ -437,6 +437,24 @@ def is_message_channel_blacklisted(guild_id, channel_id):
         return False
 
 
+def build_messages_embed(ctx, title, description):
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=discord.Color.from_str("#2b2d31")
+    )
+    embed.set_footer(text=f"Requested by {ctx.author.display_name}")
+    return embed
+
+
+def build_messages_usage_embed(ctx, command_name, usage):
+    return build_messages_embed(
+        ctx,
+        "Missing required argument(s).",
+        f"Usage: `.{command_name} {usage}`"
+    )
+
+
 def set_guild_prefix(guild_id, prefix):
     try:
         cursor = db_connection.cursor()
@@ -2271,16 +2289,24 @@ async def messages_command(ctx, member: discord.Member = None):
     target = member or ctx.author
     stats = get_message_stats(ctx.guild.id, target.id)
 
-    embed = discord.Embed(
-        title="Message Stats",
-        color=discord.Color.blurple()
-    )
-    embed.description = (
-        f"{target.mention} has sent **{stats['messages']}** message(s)\n"
-        f"Daily messages: **{stats['daily_messages']}**"
+    embed = build_messages_embed(
+        ctx,
+        f"{target.display_name}'s Messages",
+        (
+            f"All time: {stats['messages']} messages\n"
+            f"Today: {stats['daily_messages']} messages"
+        )
     )
     embed.set_thumbnail(url=target.display_avatar.url)
     await ctx.send(embed=embed)
+
+
+@messages_command.error
+async def messages_error(ctx, error):
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(embed=build_messages_usage_embed(ctx, "messages", "[@user]"))
+        return
+    raise error
 
 
 @bot.command(name="addmessages")
@@ -2288,17 +2314,20 @@ async def messages_command(ctx, member: discord.Member = None):
 async def addmessages_command(ctx, member: discord.Member, amount: int):
     """Add messages to a user"""
     if amount <= 0:
-        await ctx.send("Please specify a positive amount.")
+        await ctx.send(embed=build_messages_embed(
+            ctx,
+            "Missing required argument(s).",
+            "Usage: `.addmessages <member> <amount>`"
+        ))
         return
 
-    stats = add_messages(ctx.guild.id, member.id, amount)
+    add_messages(ctx.guild.id, member.id, amount)
 
-    embed = discord.Embed(
-        title="Messages Added",
-        description=f"Added **{amount}** message(s) to {member.mention}",
-        color=discord.Color.green()
+    embed = build_messages_embed(
+        ctx,
+        "Success",
+        f"Successfully added {amount} messages to {member.display_name} !"
     )
-    embed.add_field(name="New Total", value=str(stats["messages"]))
     await ctx.send(embed=embed)
 
 
@@ -2307,17 +2336,20 @@ async def addmessages_command(ctx, member: discord.Member, amount: int):
 async def removemessages_command(ctx, member: discord.Member, amount: int):
     """Remove messages from a user"""
     if amount <= 0:
-        await ctx.send("Please specify a positive amount.")
+        await ctx.send(embed=build_messages_embed(
+            ctx,
+            "Missing required argument(s).",
+            "Usage: `.removemessages <member> <amount>`"
+        ))
         return
 
-    stats = add_messages(ctx.guild.id, member.id, -amount)
+    add_messages(ctx.guild.id, member.id, -amount)
 
-    embed = discord.Embed(
-        title="Messages Removed",
-        description=f"Removed **{amount}** message(s) from {member.mention}",
-        color=discord.Color.orange()
+    embed = build_messages_embed(
+        ctx,
+        "Success",
+        f"Successfully removed {amount} messages from {member.display_name} !"
     )
-    embed.add_field(name="New Total", value=str(stats["messages"]))
     await ctx.send(embed=embed)
 
 
@@ -2326,7 +2358,11 @@ async def removemessages_command(ctx, member: discord.Member, amount: int):
 async def blacklistchannel_command(ctx, channel: discord.TextChannel):
     """Do not count messages from this channel"""
     blacklist_message_channel(ctx.guild.id, channel.id)
-    await ctx.send(f"{channel.mention} has been blacklisted from message tracking.")
+    await ctx.send(embed=build_messages_embed(
+        ctx,
+        "Message blacklisted channels",
+        f"Blacklisted #{channel.name}, I will not count messages posted in that channel"
+    ))
 
 
 @bot.command(name="unblacklistchannel")
@@ -2334,7 +2370,11 @@ async def blacklistchannel_command(ctx, channel: discord.TextChannel):
 async def unblacklistchannel_command(ctx, channel: discord.TextChannel):
     """Remove a channel from the message blacklist"""
     unblacklist_message_channel(ctx.guild.id, channel.id)
-    await ctx.send(f"{channel.mention} has been removed from the message blacklist.")
+    await ctx.send(embed=build_messages_embed(
+        ctx,
+        "Message blacklisted channels",
+        f"Unblacklisted #{channel.name}, I will count messages again"
+    ))
 
 
 @bot.command(name="blacklistedchannels")
@@ -2342,18 +2382,22 @@ async def blacklistedchannels_command(ctx):
     """Show all blacklisted channels"""
     channel_ids = get_blacklisted_channels(ctx.guild.id)
     if not channel_ids:
-        await ctx.send("No blacklisted channels configured.")
+        await ctx.send(embed=build_messages_embed(
+            ctx,
+            "Message blacklisted channels",
+            "No blacklisted channels configured."
+        ))
         return
 
     lines = []
     for channel_id in channel_ids:
         channel = ctx.guild.get_channel(channel_id)
-        lines.append(channel.mention if channel else f"Deleted Channel ({channel_id})")
+        lines.append(f"#{channel.name}" if channel else f"Deleted Channel ({channel_id})")
 
-    embed = discord.Embed(
-        title="Blacklisted Channels",
-        description="\n".join(lines),
-        color=discord.Color.blurple()
+    embed = build_messages_embed(
+        ctx,
+        "Message blacklisted channels",
+        "\n".join(lines)
     )
     await ctx.send(embed=embed)
 
@@ -2363,14 +2407,66 @@ async def blacklistedchannels_command(ctx):
 async def clearmessages_command(ctx):
     """Reset all message data in server"""
     clear_all_messages(ctx.guild.id)
-    await ctx.send("All message tracking data for this server has been reset.")
+    await ctx.send(embed=build_messages_embed(
+        ctx,
+        "Success",
+        "All message tracking data has been reset."
+    ))
 
 
 @bot.command(name="resetmymessages")
 async def resetmymessages_command(ctx):
     """Reset own message count"""
     reset_user_messages(ctx.guild.id, ctx.author.id)
-    await ctx.send(f"{ctx.author.mention}, your message count has been reset.")
+    await ctx.send(embed=build_messages_embed(
+        ctx,
+        "Success",
+        "Your message count has been reset."
+    ))
+
+
+@addmessages_command.error
+async def addmessages_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(embed=build_messages_usage_embed(ctx, "addmessages", "<member> <amount>"))
+        return
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(embed=build_messages_usage_embed(ctx, "addmessages", "<member> <amount>"))
+        return
+    raise error
+
+
+@removemessages_command.error
+async def removemessages_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(embed=build_messages_usage_embed(ctx, "removemessages", "<member> <amount>"))
+        return
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(embed=build_messages_usage_embed(ctx, "removemessages", "<member> <amount>"))
+        return
+    raise error
+
+
+@blacklistchannel_command.error
+async def blacklistchannel_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(embed=build_messages_usage_embed(ctx, "blacklistchannel", "<channel>"))
+        return
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(embed=build_messages_usage_embed(ctx, "blacklistchannel", "<channel>"))
+        return
+    raise error
+
+
+@unblacklistchannel_command.error
+async def unblacklistchannel_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(embed=build_messages_usage_embed(ctx, "unblacklistchannel", "<channel>"))
+        return
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(embed=build_messages_usage_embed(ctx, "unblacklistchannel", "<channel>"))
+        return
+    raise error
 
 
 @bot.command(name="leaderboard")
@@ -2413,30 +2509,38 @@ async def leaderboard_command(ctx, category: str = "invites"):
         stat_column = "messages" if category == "messages" else "daily_messages"
         leaderboard = get_message_leaderboard(ctx.guild.id, column=stat_column, limit=10)
 
-        if not leaderboard:
-            await ctx.send("No message data available yet.")
-            return
-
-        embed = discord.Embed(
-            title="🏆 Message Leaderboard" if category == "messages" else "🏆 Daily Message Leaderboard",
-            color=discord.Color.gold()
+        embed = build_messages_embed(
+            ctx,
+            "Messages Leaderboard",
+            "The messages are being updated in real-time!"
         )
+
+        if not leaderboard:
+            embed.description = "No message data available yet."
+            await ctx.send(embed=embed)
+            return
 
         leaderboard_text = ""
         for rank, (user_id, count) in enumerate(leaderboard, start=1):
             try:
                 user = await bot.fetch_user(user_id)
                 medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
-                leaderboard_text += f"{medal} {user.mention} - **{count}** message{'s' if count != 1 else ''}\n"
+                leaderboard_text += (
+                    f"{medal} {getattr(user, 'display_name', user.name)} • "
+                    f"{count} message{'s' if count != 1 else ''}\n"
+                )
             except:
-                leaderboard_text += f"#{rank} User({user_id}) - **{count}** message{'s' if count != 1 else ''}\n"
+                leaderboard_text += f"#{rank} User({user_id}) • {count} message{'s' if count != 1 else ''}\n"
 
-        embed.description = leaderboard_text
-        embed.set_footer(text=f"Total ranked users: {len(leaderboard)}")
+        embed.description = f"The messages are being updated in real-time!\n\n{leaderboard_text}"
         await ctx.send(embed=embed)
         return
 
-    await ctx.send("Usage: `.leaderboard invites`, `.leaderboard messages`, or `.leaderboard dailymessages`")
+    await ctx.send(embed=build_messages_embed(
+        ctx,
+        "Missing required argument(s).",
+        "Usage: `.leaderboard invites`, `.leaderboard messages`, or `.leaderboard dailymessages`"
+    ))
 
 
 @bot.event
