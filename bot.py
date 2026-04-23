@@ -2171,14 +2171,21 @@ async def serverinfo_command(ctx):
         await ctx.send("This command can only be used in a server.")
         return
 
-    color = discord.Color.from_rgb(88, 101, 242)
-    owner_text = str(guild.owner) if guild.owner else "Unknown"
-    verification_level = str(guild.verification_level).replace("_", " ").title()
+    color = discord.Color.from_rgb(35, 40, 45)
+    owner_text = guild.owner.mention if guild.owner else "Unknown"
+    created = (
+        f"{discord.utils.format_dt(guild.created_at, 'R')} • "
+        f"{discord.utils.format_dt(guild.created_at, 'F')}"
+    )
+    verification_level = str(guild.verification_level).replace("_", " ")
 
     embed = discord.Embed(
-        title=guild.name,
-        description="📊 Server Information",
+        description=guild.description or "No description set.",
         color=color
+    )
+    embed.set_author(
+        name=guild.name,
+        icon_url=guild.icon.url if guild.icon else None
     )
 
     embed.add_field(
@@ -2187,9 +2194,9 @@ async def serverinfo_command(ctx):
             f"Name: {guild.name}\n"
             f"Server ID: {guild.id}\n"
             f"Owner: {owner_text}\n"
-            f"Created: {discord.utils.format_dt(guild.created_at, style='F')}"
+            f"Created: {created}"
         ),
-        inline=True
+        inline=False
     )
     embed.add_field(
         name="👥 Members & Roles",
@@ -2205,7 +2212,7 @@ async def serverinfo_command(ctx):
         value=(
             f"Level: {guild.premium_tier}\n"
             f"Boosts: {guild.premium_subscription_count}\n"
-            f"AFK Timeout: {guild.afk_timeout}"
+            f"AFK Timeout: {guild.afk_timeout} sec"
         ),
         inline=True
     )
@@ -2216,12 +2223,13 @@ async def serverinfo_command(ctx):
             f"Voice: {len(guild.voice_channels)}\n"
             f"Categories: {len(guild.categories)}"
         ),
-        inline=True
+        inline=False
     )
 
-    if guild.icon:
-        embed.set_thumbnail(url=guild.icon.url)
-    embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
+    embed.set_footer(
+        text=f"Requested by {ctx.author} • {discord.utils.format_dt(datetime.now(timezone.utc), 't')}",
+        icon_url=ctx.author.display_avatar.url
+    )
     await ctx.send(embed=embed)
 
 
