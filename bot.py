@@ -2229,7 +2229,7 @@ async def serverinfo_command(ctx):
     )
 
     embed.set_footer(
-        text=f"Requested by {ctx.author} • {discord.utils.format_dt(datetime.now(timezone.utc), 'f')}",
+        text=f"Requested by {ctx.author}",
         icon_url=ctx.author.display_avatar.url
     )
     await ctx.send(embed=embed)
