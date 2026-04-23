@@ -2580,10 +2580,35 @@ async def unblacklistchannel_error(ctx, error):
     raise error
 
 
-@bot.command(name="leaderboard")
-async def leaderboard_command(ctx, category: str = "invites"):
+@bot.command(name="lb", aliases=["leaderboard"])
+async def leaderboard_command(ctx, category: str = None):
     """Show leaderboard stats"""
-    category = category.lower()
+    category_map = {
+        "i": "invites",
+        "inv": "invites",
+        "invites": "invites",
+        "m": "messages",
+        "messages": "messages",
+        "d": "dailymessages",
+        "dailymessages": "dailymessages",
+    }
+
+    if not category:
+        await ctx.send(embed=build_messages_embed(
+            ctx,
+            "Missing required argument(s).",
+            "Usage: `.lb <m | d | i>`"
+        ))
+        return
+
+    category = category_map.get(category.lower())
+    if not category:
+        await ctx.send(embed=build_messages_embed(
+            ctx,
+            "Missing required argument(s).",
+            "Usage: `.lb <m | d | i>`"
+        ))
+        return
 
     if category in ["invites", "inv"]:
         leaderboard = get_leaderboard(ctx.guild.id, limit=None)
@@ -2653,7 +2678,7 @@ async def leaderboard_command(ctx, category: str = "invites"):
     await ctx.send(embed=build_messages_embed(
         ctx,
         "Missing required argument(s).",
-        "Usage: `.leaderboard invites`, `.leaderboard messages`, or `.leaderboard dailymessages`"
+        "Usage: `.lb <m | d | i>`"
     ))
 
 
