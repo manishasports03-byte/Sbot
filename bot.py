@@ -44,6 +44,7 @@ LEADERBOARD_PAGE_SIZE = 10
 RESTART_NOTIFY_USER_ID = 760729575789166652
 startup_notice_sent = False
 MESSAGE_DAILY_RESET_KEY = "message_daily_reset_date"
+NO_PREFIX_DISABLED_CHANNEL_ID = 1379052516863381638
 NO_PREFIX_COMMANDS = {
     "about", "info", "botinfo", "ping", "invite",
     "serverinfo", "userinfo", "roleinfo", "vcinfo", "avatar", "banner", "guildbanner",
@@ -3312,11 +3313,16 @@ async def on_message(message):
         return
 
     msg = message.content.lower()
+    no_prefix_blocked_channel = (
+        message.guild is not None
+        and message.channel.id == NO_PREFIX_DISABLED_CHANNEL_ID
+    )
 
     if (
         message.guild
         and not message.author.bot
         and not message.content.startswith(DEFAULT_PREFIX)
+        and not no_prefix_blocked_channel
     ):
         first_word = message.content.split(maxsplit=1)[0].lower() if message.content.strip() else ""
         is_admin_user = (
@@ -3371,12 +3377,12 @@ async def on_message(message):
     # Track cash for specific user
     global USER_WAITING_FOR_CASH
     
-    if message.author.id == TRACKED_USER_ID and msg == "o cash":
+    if not no_prefix_blocked_channel and message.author.id == TRACKED_USER_ID and msg == "o cash":
         USER_WAITING_FOR_CASH = TRACKED_USER_ID
         return
 
     # Capture cash response from owo bot
-    if USER_WAITING_FOR_CASH == TRACKED_USER_ID and message.author.name.lower() == "owo":
+    if not no_prefix_blocked_channel and USER_WAITING_FOR_CASH == TRACKED_USER_ID and message.author.name.lower() == "owo":
         cash_amount = extract_cash_amount(message.content)
         if cash_amount is not None:
             cash_data = load_cash_data()
@@ -3414,7 +3420,7 @@ async def on_message(message):
             USER_WAITING_FOR_CASH = None
         return
 
-    if bot.user in message.mentions and not message.reference:
+    if not no_prefix_blocked_channel and bot.user in message.mentions and not message.reference:
         cleaned = message.content.replace(bot.user.mention, "").strip()
         nickname_mention = f"<@!{bot.user.id}>"
         cleaned = cleaned.replace(nickname_mention, "").strip()
@@ -3424,7 +3430,7 @@ async def on_message(message):
             await send_lunexa_welcome(ctx)
             return
 
-    if msg == "role" or msg.startswith("role ") or msg == "!role" or msg.startswith("!role "):
+    if not no_prefix_blocked_channel and (msg == "role" or msg.startswith("role ") or msg == "!role" or msg.startswith("!role ")):
         await handle_role_toggle(message)
         return
 
@@ -3468,7 +3474,7 @@ async def on_message(message):
             await message.channel.send(f"{message.author.mention} {reply}")
             break
 
-    if message.author.id == 760729575789166652 and msg == "soja morni":
+    if not no_prefix_blocked_channel and message.author.id == 760729575789166652 and msg == "soja morni":
         await message.channel.send("hap \U0001f380")
         await bot.close()
         return
