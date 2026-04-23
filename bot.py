@@ -2182,27 +2182,33 @@ async def invited_command(ctx, member: discord.Member = None):
 
 
 @bot.command(name="inviteinfo")
-async def inviteinfo_command(ctx):
-    """Show all active invite links in server"""
+async def inviteinfo_command(ctx, member: discord.Member = None):
+    """Show active invite links created by a user"""
+    target = member or ctx.author
     try:
         invites = await ctx.guild.invites()
     except discord.Forbidden:
         await ctx.send("I don't have permission to view invites.")
         return
-    
-    if not invites:
-        await ctx.send("No active invites in this server.")
-        return
-    
+
+    user_invites = [
+        invite for invite in invites
+        if invite.inviter and invite.inviter.id == target.id
+    ]
+
     embed = discord.Embed(
-        title=f"Invite codes of {ctx.author.display_name} !",
-        description="\n".join(
-            f"Invite {invite.code} • {invite.uses} Uses"
-            for invite in invites[:10]
+        title=f"Invite codes of {target.display_name} !",
+        description=(
+            "\n".join(
+                f"Invite {invite.code} • {invite.uses} Uses"
+                for invite in user_invites[:10]
+            )
+            if user_invites
+            else "No active invites found."
         ),
         color=discord.Color.blurple()
     )
-    
+
     await ctx.send(embed=embed)
 
 
