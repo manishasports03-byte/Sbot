@@ -1211,6 +1211,28 @@ def build_giveaway_embed(prize, winners, duration_text, end_time, winner_text=No
     return embed
 
 
+def build_giveaway_status_embed(title, description):
+    return discord.Embed(
+        title=title,
+        description=description,
+        color=discord.Color.from_str("#2b2d31"),
+    )
+
+
+def get_giveaway_help_embed():
+    return discord.Embed(
+        title="Giveaway",
+        color=discord.Color.from_str("#2b2d31"),
+        description="""
+Create giveaways in your Discord server
+
+▶ `gstart <time> <winners> <prize>` - Create a giveaway
+▶ `greroll` - Reroll a giveaway winner
+▶ `gend` - End a giveaway early
+        """
+    )
+
+
 def get_latest_giveaway(channel_id, active_only=False):
     channel_giveaways = [
         giveaway for giveaway in giveaways.values()
@@ -2106,12 +2128,18 @@ async def dbtest_command(ctx):
 async def gstart_command(ctx, duration: str, winners: int, *, prize: str):
     """Start a giveaway"""
     if winners <= 0:
-        await ctx.send("Winners must be at least 1.")
+        await ctx.send(embed=build_giveaway_status_embed(
+            "Missing required argument(s).",
+            "Invalid format. Example: `.gstart 1m 1 Nitro`"
+        ))
         return
 
     duration_seconds = parse_short_duration(duration)
     if duration_seconds is None:
-        await ctx.send("Use a valid duration like `10m`, `1h`, or `30s`.")
+        await ctx.send(embed=build_giveaway_status_embed(
+            "Missing required argument(s).",
+            "Invalid format. Example: `.gstart 1m 1 Nitro`"
+        ))
         return
 
     end_time = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
@@ -2121,7 +2149,10 @@ async def gstart_command(ctx, duration: str, winners: int, *, prize: str):
     try:
         await giveaway_message.add_reaction("🎉")
     except discord.HTTPException:
-        await ctx.send("I could not add the giveaway reaction.")
+        await ctx.send(embed=build_giveaway_status_embed(
+            "Giveaway",
+            "I could not add the giveaway reaction."
+        ))
         return
 
     giveaway_task = asyncio.create_task(giveaway_timer(giveaway_message.id, duration_seconds))
@@ -2144,7 +2175,10 @@ async def gend_command(ctx):
     """End an active giveaway early"""
     giveaway = get_latest_giveaway(ctx.channel.id, active_only=True)
     if giveaway is None:
-        await ctx.send("No active giveaway found in this channel.")
+        await ctx.send(embed=build_giveaway_status_embed(
+            "Giveaway",
+            "No active giveaway found in this channel."
+        ))
         return
 
     if giveaway["task"] is not None:
@@ -2153,7 +2187,16 @@ async def gend_command(ctx):
 
     success = await finalize_giveaway(giveaway["message_id"])
     if not success:
-        await ctx.send("I could not end that giveaway. The message may have been deleted.")
+        await ctx.send(embed=build_giveaway_status_embed(
+            "Giveaway",
+            "I could not end that giveaway. The message may have been deleted."
+        ))
+        return
+
+    await ctx.send(embed=build_giveaway_status_embed(
+        "Giveaway",
+        "Giveaway ended."
+    ))
 
 
 @bot.command(name="greroll")
@@ -2162,16 +2205,70 @@ async def greroll_command(ctx):
     """Reroll a giveaway winner"""
     giveaway = get_latest_giveaway(ctx.channel.id, active_only=False)
     if giveaway is None:
-        await ctx.send("No giveaway found in this channel.")
+        await ctx.send(embed=build_giveaway_status_embed(
+            "Giveaway",
+            "No giveaway found in this channel."
+        ))
         return
 
     if not giveaway["ended"]:
-        await ctx.send("That giveaway is still running. Use `.gend` first if you want to end it early.")
+        await ctx.send(embed=build_giveaway_status_embed(
+            "Giveaway",
+            "That giveaway is still running. Use `.gend` first if you want to end it early."
+        ))
         return
 
     success = await finalize_giveaway(giveaway["message_id"], reroll=True)
     if not success:
-        await ctx.send("I could not reroll that giveaway. The message may have been deleted.")
+        await ctx.send(embed=build_giveaway_status_embed(
+            "Giveaway",
+            "I could not reroll that giveaway. The message may have been deleted."
+        ))
+        return
+
+    await ctx.send(embed=build_giveaway_status_embed(
+        "Giveaway",
+        "Giveaway rerolled."
+    ))
+
+
+@gstart_command.error
+async def gstart_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(embed=build_giveaway_status_embed(
+            "Missing required argument(s).",
+            "Usage: `.gstart <time> <winners> <prize>`\nExample: `.gstart 1m 1 Nitro Classic`"
+        ))
+        return
+    if isinstance(error, (commands.BadArgument, commands.TooManyArguments)):
+        await ctx.send(embed=build_giveaway_status_embed(
+            "Missing required argument(s).",
+            "Invalid format. Example: `.gstart 1m 1 Nitro`"
+        ))
+        return
+    raise error
+
+
+@greroll_command.error
+async def greroll_error(ctx, error):
+    if isinstance(error, (commands.MissingRequiredArgument, commands.BadArgument, commands.TooManyArguments)):
+        await ctx.send(embed=build_giveaway_status_embed(
+            "Missing required argument(s).",
+            "Usage: `.greroll`"
+        ))
+        return
+    raise error
+
+
+@gend_command.error
+async def gend_error(ctx, error):
+    if isinstance(error, (commands.MissingRequiredArgument, commands.BadArgument, commands.TooManyArguments)):
+        await ctx.send(embed=build_giveaway_status_embed(
+            "Missing required argument(s).",
+            "Usage: `.gend`"
+        ))
+        return
+    raise error
 
 
 # ===== MODERATION COMMANDS =====
@@ -3350,6 +3447,217 @@ Leaderboard
 ✅ **Invite Tracking** - Track who invited whom
                 """
             )
+
+
+def get_main_help_embed():
+    """Get the main help menu embed."""
+    embed = discord.Embed(color=discord.Color.from_str("#2b2d31"))
+    embed.set_author(
+        name="whAlien ✨",
+        icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None,
+    )
+    embed.description = """Hey, I'm whAlien ✨
+A powerful multipurpose bot with fast and reliable features
+
+• **Prefix:** `.`
+• **Total Commands:** 25+
+
+• **Choose a category:**
+
+🛡️ Moderation
+⚙️ Utility
+ℹ️ Info
+📊 Messages
+📨 Invites
+🎁 Giveaway
+⚡ Features"""
+    embed.set_footer(text="Made with ❤️ by @_anuneet1x ")
+    return embed
+
+
+def get_help_module_embed(selected):
+    if selected == "mod":
+        return discord.Embed(
+            title="🛡️ Moderation Commands",
+            color=discord.Color.from_str("#2b2d31"),
+            description="""
+`.warn @user [reason]` - Warn a member
+`.mute @user [duration]` - Mute a member (e.g., 10m, 1h)
+`.unmute @user` - Unmute a member
+`.kick @user [reason]` - Kick a member
+`.ban @user [reason]` - Ban a member
+`.purge [amount]` - Delete messages
+`.slowmode [seconds]` - Set channel slowmode
+            """
+        )
+
+    if selected == "util":
+        return discord.Embed(
+            title="⚙️ Utility Commands",
+            color=discord.Color.from_str("#2b2d31"),
+            description="""
+`.tickets` - Create support tickets
+`.modlogs [@user]` - View moderation logs
+`.afk [reason]` - Set AFK status
+`role @user Role Name` - Toggle roles
+`.serverinfo` - Show server details
+`.userinfo [@user]` - Show user info
+`.roleinfo @role` - Show role info
+`.vcinfo [channel]` - Show voice channel info
+`.avatar [@user]` - Show user's avatar
+`.banner [@user]` - Show user's banner
+`.guildbanner` - Show server banner
+`.support` - Send support server link
+`.membercount` - Show total members count
+`.stats` - Show bot stats
+`.shards` - Show shard info
+`.permissions` - Show bot permissions
+`.accountage [@user]` - Show account age
+`.invite` - Show bot invite link
+`.uptime` - Show bot uptime
+`.botinfo` - Show bot information
+`.ping` - Show bot latency
+`.setprefix [new prefix]` - Change bot prefix
+`.deleteprefix` - Reset prefix
+            """
+        )
+
+    if selected == "info":
+        return discord.Embed(
+            title="ℹ️ Info Commands",
+            color=discord.Color.from_str("#2b2d31"),
+            description="""
+`.about` / `.info` - Bot information
+`.help` - Help menu (you are here)
+`.setup` - Server setup guide
+`.stats` - Server statistics
+            """
+        )
+
+    if selected == "messages":
+        return discord.Embed(
+            title="Messages",
+            color=discord.Color.from_str("#2b2d31"),
+            description="""
+Keeps the count of users' messages
+
+Core Commands
+▶ `messages [@user]` - Displays message count of a user
+
+Message Management
+▶ `addmessages @user amount` - Add messages
+▶ `removemessages @user amount` - Remove messages
+▶ `clearmessages` - Clear all message data
+▶ `resetmymessages` - Reset your messages
+
+Channel Control
+▶ `blacklistchannel #channel` - Exclude a channel
+▶ `unblacklistchannel #channel` - Remove blacklist
+▶ `blacklistedchannels` - Show blacklisted channels
+
+Leaderboards
+▶ `leaderboard messages` - Top message senders
+▶ `leaderboard dailymessages` - Top daily senders
+            """
+        )
+
+    if selected == "invites":
+        return discord.Embed(
+            title="Invite logger / Invite tracker",
+            color=discord.Color.from_str("#2b2d31"),
+            description="""
+Tracks and logs the server invites
+
+Core Commands
+▶ `invites [@user]` - Displays the invites stats of a member
+▶ `inviter [@user]` - Displays the inviter of a server member
+▶ `invited [@user]` - Displays the invited list of a member
+▶ `inviteinfo` - Displays active invite codes
+
+Invite Management
+▶ `addinvites @user amount` - Add invites
+▶ `removeinvites @user amount` - Remove invites
+▶ `clearinvites` - Clear invite data
+▶ `resetmyinvites` - Reset your invites
+
+Leaderboard
+▶ `leaderboard invites` - Show top inviters
+            """
+        )
+
+    if selected == "giveaway":
+        return get_giveaway_help_embed()
+
+    if selected == "features":
+        return discord.Embed(
+            title="⚡ Features",
+            color=discord.Color.from_str("#2b2d31"),
+            description="""
+✅ **Spam Protection** - Auto-mutes spammers
+✅ **Raid Detection** - Detects mass joins
+✅ **AFK System** - Manage AFK status
+✅ **Auto-role** - Assigns roles on join
+✅ **Bad Word Filter** - Filters profanity
+✅ **Rotating Status** - Bot status changes every 7s
+✅ **Ticket System** - Support ticket management
+✅ **Moderation Logs** - Track all mod actions
+✅ **Role Management** - Toggle roles easily
+✅ **Invite Tracking** - Track who invited whom
+            """
+        )
+
+    return get_main_help_embed()
+
+
+class ModuleView(discord.ui.View):
+    """Module view with dropdown and back button."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.select(
+        custom_id="help-menu-module-clean",
+        placeholder="Select Category From Here",
+        options=[
+            discord.SelectOption(label="Moderation", value="mod", emoji="🛡️"),
+            discord.SelectOption(label="Utility", value="util", emoji="⚙️"),
+            discord.SelectOption(label="Info", value="info", emoji="ℹ️"),
+            discord.SelectOption(label="Messages", value="messages", emoji="📊"),
+            discord.SelectOption(label="Invites", value="invites", emoji="📨"),
+            discord.SelectOption(label="Giveaway", value="giveaway", emoji="🎁"),
+            discord.SelectOption(label="Features", value="features", emoji="⚡"),
+        ],
+    )
+    async def help_select_module(self, interaction: discord.Interaction, select: discord.ui.Select):
+        await interaction.response.edit_message(embed=get_help_module_embed(select.values[0]), view=self)
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="⬅️")
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(embed=get_main_help_embed(), view=HelpView())
+
+
+class HelpView(discord.ui.View):
+    """Interactive help menu with dropdown."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.select(
+        custom_id="help-menu-clean",
+        placeholder="Select Category From Here",
+        options=[
+            discord.SelectOption(label="Moderation", value="mod", emoji="🛡️"),
+            discord.SelectOption(label="Utility", value="util", emoji="⚙️"),
+            discord.SelectOption(label="Info", value="info", emoji="ℹ️"),
+            discord.SelectOption(label="Messages", value="messages", emoji="📊"),
+            discord.SelectOption(label="Invites", value="invites", emoji="📨"),
+            discord.SelectOption(label="Giveaway", value="giveaway", emoji="🎁"),
+            discord.SelectOption(label="Features", value="features", emoji="⚡"),
+        ],
+    )
+    async def help_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        await interaction.response.edit_message(
+            embed=get_help_module_embed(select.values[0]),
+            view=ModuleView(),
+        )
 
 
 @bot.command(name="help", aliases=["commands", "cmd"])
