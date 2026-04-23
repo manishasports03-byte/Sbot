@@ -2399,15 +2399,16 @@ async def messages_command(ctx, member: discord.Member = None):
     target = member or ctx.author
     stats = get_message_stats(ctx.guild.id, target.id)
 
-    embed = build_messages_embed(
-        ctx,
-        f"{target.display_name}'s Messages",
-        (
-            f"All time: {stats['messages']} messages\n"
-            f"Today: {stats['daily_messages']} messages"
-        )
+    embed = discord.Embed(
+        title=f"{target.display_name}'s Messages",
+        description=(
+            f"All time : {stats['messages']} messages in this server !\n"
+            f"Today : {stats['daily_messages']} messages in this server\n\n"
+            f"▶ Discover new events here!\n\n"
+            f"Messages are being updated in real-time"
+        ),
+        color=discord.Color.from_str("#2b2d31")
     )
-    embed.set_thumbnail(url=target.display_avatar.url)
     await ctx.send(embed=embed)
 
 
