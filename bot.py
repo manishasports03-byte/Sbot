@@ -65,9 +65,10 @@ temp_vc_users = {}  # {user_id: channel_id}
 
 # ===== TICKETS CONFIG =====
 TICKET_PANEL_CHANNEL_ID = 1379498807288529007
-TICKET_CATEGORY_ID = 1379497343765844218
+TICKET_SUPPORT_CATEGORY_ID = 1379497343765844218
+TICKET_REWARDS_CATEGORY_ID = 1496957253117415555
 TICKET_PANEL_MESSAGE_KEY = "ticket_panel_message_id"
-TICKET_PANEL_TITLE = "Support Ticket 🎟️"
+TICKET_PANEL_TITLE = "CREATE TICKET"
 
 # ===== GIVEAWAY CONFIG =====
 giveaways = {}  # {message_id: {"message_id": int, "channel_id": int, "guild_id": int, "end_time": datetime, "winners": int, "prize": str, "ended": bool, "task": asyncio.Task | None}}
@@ -900,23 +901,57 @@ def get_ticket_owner_id(channel):
 
 
 async def find_existing_ticket_channel(guild, user_id):
-    category = guild.get_channel(TICKET_CATEGORY_ID)
-    if category is None:
-        return None
+    for category_id in (TICKET_SUPPORT_CATEGORY_ID, TICKET_REWARDS_CATEGORY_ID):
+        category = guild.get_channel(category_id)
+        if category is None:
+            continue
 
-    for channel in category.text_channels:
-        if get_ticket_owner_id(channel) == user_id:
-            return channel
+        for channel in category.text_channels:
+            if get_ticket_owner_id(channel) == user_id:
+                return channel
     return None
 
 
+def build_ticket_panel_embed():
+    return build_ticket_embed(
+        TICKET_PANEL_TITLE,
+        "To create a ticket use the buttons below\n• Have patience after creating a ticket\n• Creating ticket for fun could result in punishments!",
+        "whAlien - Ticket System"
+    )
+
+
 async def send_ticket_panel(channel):
+    return await send_or_update_ticket_panel(channel)
+
+
+async def send_or_update_ticket_panel(channel):
+    embed = build_ticket_panel_embed()
+    view = TicketPanelView()
+    stored_message_id = await get_state_value(TICKET_PANEL_MESSAGE_KEY)
+    if stored_message_id:
+        try:
+            message = await channel.fetch_message(int(stored_message_id))
+            await message.edit(embed=embed, view=view)
+            return message
+        except (ValueError, discord.NotFound, discord.Forbidden, discord.HTTPException):
+            pass
+
+    try:
+        async for message in channel.history(limit=10):
+            if message.author.id == bot.user.id and message.embeds:
+                if message.embeds[0].title == TICKET_PANEL_TITLE:
+                    await message.edit(embed=embed, view=view)
+                    await set_state_value(TICKET_PANEL_MESSAGE_KEY, str(message.id))
+                    return message
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
     embed = build_ticket_embed(
         TICKET_PANEL_TITLE,
-        "To create a ticket use the Create ticket button",
-        "whAlien - Ticketing system"
+        "To create a ticket use the buttons below\n• Have patience after creating a ticket\n• Creating ticket for fun could result in punishments!",
+        "whAlien - Ticket System"
     )
-    message = await channel.send(embed=embed, view=TicketPanelView())
+    message = await channel.send(embed=embed, view=view)
     await set_state_value(TICKET_PANEL_MESSAGE_KEY, str(message.id))
     return message
 
@@ -929,25 +964,8 @@ async def ensure_ticket_panel():
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             return
 
-    stored_message_id = await get_state_value(TICKET_PANEL_MESSAGE_KEY)
-    if stored_message_id:
-        try:
-            await panel_channel.fetch_message(int(stored_message_id))
-            return
-        except (ValueError, discord.NotFound, discord.Forbidden, discord.HTTPException):
-            pass
-
     try:
-        async for message in panel_channel.history(limit=10):
-            if message.author.id == bot.user.id and message.embeds:
-                if message.embeds[0].title == TICKET_PANEL_TITLE:
-                    await set_state_value(TICKET_PANEL_MESSAGE_KEY, str(message.id))
-                    return
-    except (discord.Forbidden, discord.HTTPException):
-        return
-
-    try:
-        await send_ticket_panel(panel_channel)
+        await send_or_update_ticket_panel(panel_channel)
     except (discord.Forbidden, discord.HTTPException):
         pass
 
@@ -957,8 +975,7 @@ class TicketPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.secondary, emoji="📩", custom_id="ticket_panel_create")
-    async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _create_ticket(self, interaction: discord.Interaction, category_id: int):
         if interaction.guild is None:
             await interaction.response.send_message("This can only be used in a server.", ephemeral=True)
             return
@@ -973,7 +990,7 @@ class TicketPanelView(discord.ui.View):
         await interaction.edit_original_response(content="Creating ticket...")
         await asyncio.sleep(1)
 
-        category = interaction.guild.get_channel(TICKET_CATEGORY_ID)
+        category = interaction.guild.get_channel(category_id)
         if category is None:
             await interaction.edit_original_response(content="Ticket category not found.")
             return
@@ -1017,6 +1034,18 @@ class TicketPanelView(discord.ui.View):
             view=TicketCloseView()
         )
         await interaction.edit_original_response(content=f"Ticket created: {ticket_channel.mention}")
+
+    @discord.ui.button(label="Claim Rewards", style=discord.ButtonStyle.success, emoji="✨", custom_id="ticket_rewards")
+    async def rewards_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._create_ticket(interaction, TICKET_REWARDS_CATEGORY_ID)
+
+    @discord.ui.button(label="Apply For Staff", style=discord.ButtonStyle.primary, emoji="📩", custom_id="ticket_staff")
+    async def staff_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._create_ticket(interaction, TICKET_SUPPORT_CATEGORY_ID)
+
+    @discord.ui.button(label="Help and Support", style=discord.ButtonStyle.danger, emoji="🤝", custom_id="ticket_support")
+    async def support_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._create_ticket(interaction, TICKET_SUPPORT_CATEGORY_ID)
 
 
 class TicketCreateView(TicketPanelView):
