@@ -46,6 +46,7 @@ db_connection = None
 server_invites = {}  # {guild_id: {invite_code: invite_object}}
 INVITE_UI_COLOR = discord.Color.from_str("#2b2d31")
 INVITED_PAGE_SIZE = 5
+LEADERBOARD_PAGE_SIZE = 10
 RESTART_NOTIFY_USER_ID = 760729575789166652
 startup_notice_sent = False
 MESSAGE_DAILY_RESET_KEY = "message_daily_reset_date"
@@ -233,10 +234,16 @@ def get_leaderboard(guild_id, limit=10):
     """Get top inviters for a guild"""
     try:
         cursor = db_connection.cursor()
-        cursor.execute(
-            "SELECT user_id, invites FROM invite_stats WHERE guild_id = ? ORDER BY invites DESC LIMIT ?",
-            (guild_id, limit)
-        )
+        if limit is None:
+            cursor.execute(
+                "SELECT user_id, invites FROM invite_stats WHERE guild_id = ? ORDER BY invites DESC",
+                (guild_id,)
+            )
+        else:
+            cursor.execute(
+                "SELECT user_id, invites FROM invite_stats WHERE guild_id = ? ORDER BY invites DESC LIMIT ?",
+                (guild_id, limit)
+            )
         return cursor.fetchall()
     except sqlite3.Error as e:
         print(f"Database error: {e}")
@@ -371,16 +378,27 @@ def get_message_leaderboard(guild_id, column="messages", limit=10):
     try:
         reset_daily_message_counts_if_needed()
         cursor = db_connection.cursor()
-        cursor.execute(
-            f"""
-            SELECT user_id, {column}
-            FROM message_stats
-            WHERE guild_id = ? AND {column} > 0
-            ORDER BY {column} DESC
-            LIMIT ?
-            """,
-            (guild_id, limit)
-        )
+        if limit is None:
+            cursor.execute(
+                f"""
+                SELECT user_id, {column}
+                FROM message_stats
+                WHERE guild_id = ? AND {column} > 0
+                ORDER BY {column} DESC
+                """,
+                (guild_id,)
+            )
+        else:
+            cursor.execute(
+                f"""
+                SELECT user_id, {column}
+                FROM message_stats
+                WHERE guild_id = ? AND {column} > 0
+                ORDER BY {column} DESC
+                LIMIT ?
+                """,
+                (guild_id, limit)
+            )
         return cursor.fetchall()
     except sqlite3.Error as e:
         print(f"Database error: {e}")
@@ -1310,6 +1328,98 @@ class InvitedUsersView(discord.ui.View):
     async def stop_pages(self, interaction: discord.Interaction, button: discord.ui.Button):
         self._sync_buttons(stopped=True)
         await interaction.response.edit_message(view=self)
+        self.stop()
+
+    @discord.ui.button(emoji="⏩", style=discord.ButtonStyle.secondary)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = min(self.total_pages - 1, self.page + 1)
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(emoji="⏭", style=discord.ButtonStyle.secondary)
+    async def last_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = self.total_pages - 1
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+
+class LeaderboardView(discord.ui.View):
+    def __init__(self, author_id, title, entries, intro_text=None):
+        super().__init__(timeout=180)
+        self.author_id = author_id
+        self.title = title
+        self.entries = entries
+        self.intro_text = intro_text
+        self.page = 0
+        self.message = None
+        self._sync_buttons()
+
+    @property
+    def total_pages(self):
+        return max(1, (len(self.entries) + LEADERBOARD_PAGE_SIZE - 1) // LEADERBOARD_PAGE_SIZE)
+
+    def _sync_buttons(self, stopped=False):
+        is_first_page = self.page == 0
+        is_last_page = self.page >= self.total_pages - 1
+
+        self.first_page.disabled = stopped or is_first_page
+        self.previous_page.disabled = stopped or is_first_page
+        self.stop_pages.disabled = stopped
+        self.next_page.disabled = stopped or is_last_page
+        self.last_page.disabled = stopped or is_last_page
+
+    def build_embed(self):
+        start = self.page * LEADERBOARD_PAGE_SIZE
+        end = start + LEADERBOARD_PAGE_SIZE
+        page_entries = self.entries[start:end]
+
+        parts = []
+        if self.intro_text:
+            parts.append(self.intro_text)
+        if page_entries:
+            parts.append("\n".join(page_entries))
+
+        embed = discord.Embed(
+            title=self.title,
+            description="\n\n".join(parts) if parts else "No data available.",
+            color=discord.Color.from_str("#2b2d31")
+        )
+        embed.set_footer(text=f"Page {self.page + 1}/{self.total_pages}")
+        return embed
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "Only the command author can use these buttons.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def on_timeout(self):
+        self._sync_buttons(stopped=True)
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(emoji="⏮", style=discord.ButtonStyle.secondary)
+    async def first_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = 0
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(emoji="⏪", style=discord.ButtonStyle.secondary)
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = max(0, self.page - 1)
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(emoji="⏹", style=discord.ButtonStyle.danger)
+    async def stop_pages(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self._sync_buttons(stopped=True)
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
         self.stop()
 
     @discord.ui.button(emoji="⏩", style=discord.ButtonStyle.secondary)
@@ -2475,65 +2585,68 @@ async def leaderboard_command(ctx, category: str = "invites"):
     category = category.lower()
 
     if category in ["invites", "inv"]:
-        leaderboard = get_leaderboard(ctx.guild.id, limit=10)
-
-        embed = discord.Embed(
-            title="Invite Leaderboard",
-            color=discord.Color.from_str("#2b2d31")
-        )
+        leaderboard = get_leaderboard(ctx.guild.id, limit=None)
 
         if not leaderboard:
-            embed.description = "No invite data available yet."
+            embed = discord.Embed(
+                title="Invite Leaderboard",
+                description="No invite data available yet.",
+                color=discord.Color.from_str("#2b2d31")
+            )
             embed.set_footer(text="Page 1/1")
             await ctx.send(embed=embed)
             return
 
-        leaderboard_text = ""
+        entries = []
         for rank, (user_id, count) in enumerate(leaderboard, start=1):
             try:
                 user = await bot.fetch_user(user_id)
-                medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
-                leaderboard_text += (
-                    f"{medal} {getattr(user, 'display_name', user.name)} - "
-                    f"**{count}** invite{'s' if count != 1 else ''}\n"
+                entries.append(
+                    f"#{rank} {getattr(user, 'display_name', user.name)} • "
+                    f"{count} invite{'s' if count != 1 else ''}"
                 )
             except:
-                leaderboard_text += f"#{rank} User({user_id}) - **{count}** invite{'s' if count != 1 else ''}\n"
+                entries.append(f"#{rank} User({user_id}) • {count} invite{'s' if count != 1 else ''}")
 
-        embed.description = leaderboard_text
-        embed.set_footer(text="Page 1/1")
-        await ctx.send(embed=embed)
+        view = LeaderboardView(ctx.author.id, "Invite Leaderboard", entries)
+        message = await ctx.send(embed=view.build_embed(), view=view)
+        view.message = message
         return
 
     if category in ["messages", "dailymessages"]:
         stat_column = "messages" if category == "messages" else "daily_messages"
-        leaderboard = get_message_leaderboard(ctx.guild.id, column=stat_column, limit=10)
-
-        embed = build_messages_embed(
-            ctx,
-            "Messages Leaderboard",
-            "The messages are being updated in real-time!"
-        )
+        leaderboard = get_message_leaderboard(ctx.guild.id, column=stat_column, limit=None)
+        title = "Messages Leaderboard" if category == "messages" else "Daily Messages Leaderboard"
 
         if not leaderboard:
-            embed.description = "No message data available yet."
+            embed = discord.Embed(
+                title=title,
+                description="No message data available yet.",
+                color=discord.Color.from_str("#2b2d31")
+            )
+            embed.set_footer(text="Page 1/1")
             await ctx.send(embed=embed)
             return
 
-        leaderboard_text = ""
+        entries = []
         for rank, (user_id, count) in enumerate(leaderboard, start=1):
             try:
                 user = await bot.fetch_user(user_id)
-                medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
-                leaderboard_text += (
-                    f"{medal} {getattr(user, 'display_name', user.name)} • "
-                    f"{count} message{'s' if count != 1 else ''}\n"
+                entries.append(
+                    f"#{rank} {getattr(user, 'display_name', user.name)} • "
+                    f"{count} message{'s' if count != 1 else ''}"
                 )
             except:
-                leaderboard_text += f"#{rank} User({user_id}) • {count} message{'s' if count != 1 else ''}\n"
+                entries.append(f"#{rank} User({user_id}) • {count} message{'s' if count != 1 else ''}")
 
-        embed.description = f"The messages are being updated in real-time!\n\n{leaderboard_text}"
-        await ctx.send(embed=embed)
+        view = LeaderboardView(
+            ctx.author.id,
+            title,
+            entries,
+            intro_text="The messages are being updated in real-time!"
+        )
+        message = await ctx.send(embed=view.build_embed(), view=view)
+        view.message = message
         return
 
     await ctx.send(embed=build_messages_embed(
