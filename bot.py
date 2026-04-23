@@ -68,7 +68,7 @@ TICKET_PANEL_CHANNEL_ID = 1379498807288529007
 TICKET_SUPPORT_CATEGORY_ID = 1379497343765844218
 TICKET_REWARDS_CATEGORY_ID = 1496957253117415555
 TICKET_PANEL_MESSAGE_KEY = "ticket_panel_message_id"
-TICKET_PANEL_TITLE = "CREATE TICKET"
+TICKET_PANEL_TITLE = "Create Ticket"
 
 # ===== GIVEAWAY CONFIG =====
 giveaways = {}  # {message_id: {"message_id": int, "channel_id": int, "guild_id": int, "end_time": datetime, "winners": int, "prize": str, "ended": bool, "task": asyncio.Task | None}}
@@ -882,7 +882,8 @@ def build_ticket_embed(title, description, footer=None):
         color=discord.Color.from_str("#2b2d31")
     )
     if footer:
-        embed.set_footer(text=footer)
+        footer_icon = bot.user.display_avatar.url if bot.user and bot.user.display_avatar else None
+        embed.set_footer(text=footer, icon_url=footer_icon)
     return embed
 
 
@@ -920,6 +921,14 @@ def build_ticket_panel_embed():
     )
 
 
+def build_ticket_panel_embed():
+    return build_ticket_embed(
+        TICKET_PANEL_TITLE,
+        "To create a ticket use the buttons below 🙂\n\nHave patience after creating a ticket 🤍",
+        "whAlien - Ticket System"
+    )
+
+
 async def send_ticket_panel(channel):
     return await send_or_update_ticket_panel(channel)
 
@@ -951,6 +960,7 @@ async def send_or_update_ticket_panel(channel):
         "To create a ticket use the buttons below\n• Have patience after creating a ticket\n• Creating ticket for fun could result in punishments!",
         "whAlien - Ticket System"
     )
+    embed = build_ticket_panel_embed()
     message = await channel.send(embed=embed, view=view)
     await set_state_value(TICKET_PANEL_MESSAGE_KEY, str(message.id))
     return message
@@ -1035,15 +1045,15 @@ class TicketPanelView(discord.ui.View):
         )
         await interaction.edit_original_response(content=f"Ticket created: {ticket_channel.mention}")
 
-    @discord.ui.button(label="Claim Rewards", style=discord.ButtonStyle.success, emoji="✨", custom_id="ticket_rewards")
+    @discord.ui.button(label="Rewards", style=discord.ButtonStyle.success, emoji="✨", custom_id="ticket_rewards")
     async def rewards_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._create_ticket(interaction, TICKET_REWARDS_CATEGORY_ID)
 
-    @discord.ui.button(label="Apply For Staff", style=discord.ButtonStyle.primary, emoji="📩", custom_id="ticket_staff")
+    @discord.ui.button(label="Staff", style=discord.ButtonStyle.primary, emoji="📩", custom_id="ticket_staff")
     async def staff_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._create_ticket(interaction, TICKET_SUPPORT_CATEGORY_ID)
 
-    @discord.ui.button(label="Help and Support", style=discord.ButtonStyle.danger, emoji="🤝", custom_id="ticket_support")
+    @discord.ui.button(label="Support", style=discord.ButtonStyle.danger, emoji="🤝", custom_id="ticket_support")
     async def support_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._create_ticket(interaction, TICKET_SUPPORT_CATEGORY_ID)
 
