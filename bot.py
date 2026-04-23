@@ -69,6 +69,8 @@ TICKET_SUPPORT_CATEGORY_ID = 1379497343765844218
 TICKET_REWARDS_CATEGORY_ID = 1496957253117415555
 TICKET_PANEL_MESSAGE_KEY = "ticket_panel_message_id"
 TICKET_PANEL_TITLE = "Create Ticket"
+TICKET_BUTTON_COOLDOWN_SECONDS = 15
+ticket_button_cooldowns = {}
 
 # ===== GIVEAWAY CONFIG =====
 giveaways = {}  # {message_id: {"message_id": int, "channel_id": int, "guild_id": int, "end_time": datetime, "winners": int, "prize": str, "ended": bool, "task": asyncio.Task | None}}
@@ -985,6 +987,18 @@ class TicketPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        now = datetime.now(timezone.utc)
+        expires_at = ticket_button_cooldowns.get(interaction.user.id)
+        if expires_at and now < expires_at:
+            remaining = int((expires_at - now).total_seconds())
+            await interaction.response.send_message(
+                f"Please wait {remaining}s before creating another ticket.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
     async def _create_ticket(self, interaction: discord.Interaction, category_id: int):
         if interaction.guild is None:
             await interaction.response.send_message("This can only be used in a server.", ephemeral=True)
@@ -1003,6 +1017,15 @@ class TicketPanelView(discord.ui.View):
         category = interaction.guild.get_channel(category_id)
         if category is None:
             await interaction.edit_original_response(content="Ticket category not found.")
+            return
+
+        try:
+            await category.set_permissions(
+                interaction.guild.default_role,
+                view_channel=False,
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            await interaction.edit_original_response(content="I don't have permission to secure the ticket category.")
             return
 
         overwrites = {
@@ -1038,11 +1061,26 @@ class TicketPanelView(discord.ui.View):
             "Welcome",
             "Support will be with you shortly.\nTo close this press the close button"
         )
-        await ticket_channel.send(
-            content=interaction.user.mention,
-            embed=welcome_embed,
-            view=TicketCloseView()
-        )
+        try:
+            await ticket_channel.set_permissions(
+                interaction.guild.default_role,
+                view_channel=False,
+                send_messages=False,
+                read_message_history=False,
+            )
+            await ticket_channel.send(
+                content=interaction.user.mention,
+                embed=welcome_embed,
+                view=TicketCloseView()
+            )
+        except discord.Forbidden:
+            await interaction.edit_original_response(content="I don't have permission to finish setting up the ticket.")
+            return
+        except discord.HTTPException:
+            await interaction.edit_original_response(content="I could not finish setting up the ticket.")
+            return
+
+        ticket_button_cooldowns[interaction.user.id] = datetime.now(timezone.utc) + timedelta(seconds=TICKET_BUTTON_COOLDOWN_SECONDS)
         await interaction.edit_original_response(content=f"Ticket created: {ticket_channel.mention}")
 
     @discord.ui.button(label="Rewards", style=discord.ButtonStyle.success, emoji="✨", custom_id="ticket_rewards")
