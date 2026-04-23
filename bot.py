@@ -2258,18 +2258,13 @@ async def inviteinfo_command(ctx):
         return
     
     embed = discord.Embed(
-        title="🔗 Server Invites",
+        title=f"Invite codes of {ctx.author.display_name} !",
+        description="\n".join(
+            f"Invite {invite.code} • {invite.uses} Uses"
+            for invite in invites[:10]
+        ),
         color=discord.Color.blurple()
     )
-    
-    for invite in invites[:10]:  # Show max 10 invites
-        creator = getattr(invite.inviter, "display_name", invite.inviter.name) if invite.inviter else "Unknown"
-        expires = "Never" if not invite.expires_at else invite.expires_at.strftime("%Y-%m-%d")
-        embed.add_field(
-            name=f"discord.gg/{invite.code}",
-            value=f"👤 {creator}\n📊 Uses: {invite.uses}\n⏰ Expires: {expires}",
-            inline=False
-        )
     
     await ctx.send(embed=embed)
 
