@@ -132,15 +132,6 @@ def init_invite_database():
             )
         """)
         
-        # Create invite_channels table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS invite_channels (
-                guild_id INTEGER PRIMARY KEY,
-                join_channel INTEGER,
-                leave_channel INTEGER
-            )
-        """)
-
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS message_stats (
                 guild_id INTEGER,
@@ -486,59 +477,6 @@ def parse_short_duration(duration_text):
             return None
         return amount * duration_map[unit]
     except (ValueError, IndexError):
-        return None
-
-def set_join_channel(guild_id, channel_id):
-    """Set join message channel"""
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO invite_channels (guild_id, join_channel) VALUES ((SELECT guild_id FROM invite_channels WHERE guild_id = ?), ?) OR INSERT INTO invite_channels (guild_id, join_channel) VALUES (?, ?)",
-            (guild_id, channel_id, guild_id, channel_id)
-        )
-        # Simpler approach
-        cursor.execute("SELECT * FROM invite_channels WHERE guild_id = ?", (guild_id,))
-        if cursor.fetchone():
-            cursor.execute("UPDATE invite_channels SET join_channel = ? WHERE guild_id = ?", (channel_id, guild_id))
-        else:
-            cursor.execute("INSERT INTO invite_channels (guild_id, join_channel) VALUES (?, ?)", (guild_id, channel_id))
-        db_connection.commit()
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-
-def set_leave_channel(guild_id, channel_id):
-    """Set leave message channel"""
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("SELECT * FROM invite_channels WHERE guild_id = ?", (guild_id,))
-        if cursor.fetchone():
-            cursor.execute("UPDATE invite_channels SET leave_channel = ? WHERE guild_id = ?", (channel_id, guild_id))
-        else:
-            cursor.execute("INSERT INTO invite_channels (guild_id, leave_channel) VALUES (?, ?)", (guild_id, channel_id))
-        db_connection.commit()
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-
-def get_join_channel(guild_id):
-    """Get join message channel"""
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("SELECT join_channel FROM invite_channels WHERE guild_id = ?", (guild_id,))
-        result = cursor.fetchone()
-        return result[0] if result else None
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-        return None
-
-def get_leave_channel(guild_id):
-    """Get leave message channel"""
-    try:
-        cursor = db_connection.cursor()
-        cursor.execute("SELECT leave_channel FROM invite_channels WHERE guild_id = ?", (guild_id,))
-        result = cursor.fetchone()
-        return result[0] if result else None
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
         return None
 
 def extract_cash_amount(text):
@@ -1450,28 +1388,6 @@ async def on_member_join(member):
             add_invites(guild.id, inviter_id, 1)
             set_inviter(guild.id, member.id, inviter_id)
             
-            # Send join message if configured
-            join_channel_id = get_join_channel(guild.id)
-            if join_channel_id:
-                channel = guild.get_channel(join_channel_id)
-                if channel:
-                    try:
-                        invites_count = get_invites(guild.id, inviter_id)
-                        embed = discord.Embed(
-                            title="👋 New Member Joined",
-                            description=f"{member.display_name} joined the server!",
-                            color=discord.Color.green()
-                        )
-                        embed.add_field(
-                            name="Invited by",
-                            value=getattr(used_invite.inviter, "display_name", used_invite.inviter.name),
-                            inline=False
-                        )
-                        embed.add_field(name="Inviter's Total Invites", value=str(invites_count), inline=False)
-                        embed.set_thumbnail(url=member.display_avatar.url)
-                        await channel.send(embed=embed)
-                    except:
-                        pass
     except discord.Forbidden:
         pass
     except Exception as e:
@@ -2269,34 +2185,6 @@ async def inviteinfo_command(ctx):
     await ctx.send(embed=embed)
 
 
-@bot.command(name="setjoinchannel")
-@commands.has_permissions(administrator=True)
-async def setjoinchannel_command(ctx, channel: discord.TextChannel):
-    """Set channel for join messages"""
-    set_join_channel(ctx.guild.id, channel.id)
-    
-    embed = discord.Embed(
-        title="✅ Join Channel Set",
-        description=f"Join messages will be sent to {channel.mention}",
-        color=discord.Color.green()
-    )
-    await ctx.send(embed=embed)
-
-
-@bot.command(name="setleavechannel")
-@commands.has_permissions(administrator=True)
-async def setleavechannel_command(ctx, channel: discord.TextChannel):
-    """Set channel for leave messages"""
-    set_leave_channel(ctx.guild.id, channel.id)
-    
-    embed = discord.Embed(
-        title="✅ Leave Channel Set",
-        description=f"Leave messages will be sent to {channel.mention}",
-        color=discord.Color.green()
-    )
-    await ctx.send(embed=embed)
-
-
 @bot.command(name="addinvites")
 @commands.has_permissions(administrator=True)
 async def addinvites_command(ctx, member: discord.Member, amount: int):
@@ -2843,20 +2731,6 @@ Core Commands
 ▶ `invited [@user]` - Displays the invited list of a member
 ▶ `inviteinfo` - Displays active invite codes
 
-Channel Configuration
-▶ `setjoinchannel #channel` - Set the welcome channel
-▶ `unsetwelcomechannel` - Disable welcome messages
-▶ `setleavechannel` - Set the leave channel
-▶ `unsetleavechannel` - Disable leave messages
-
-Message Configuration
-▶ `setjoinmessage` - Set custom join message
-▶ `unsetjoinmessage` - Delete join message
-▶ `setleavemessage` - Set custom leave message
-▶ `unsetleavemessage` - Delete leave message
-▶ `variables` - Show usable variables
-▶ `testmessage` - Preview join message
-
 Invite Management
 ▶ `addinvites @user amount` - Add invites
 ▶ `removeinvites @user amount` - Remove invites
@@ -3004,20 +2878,6 @@ Core Commands
 ▶ `invited [@user]` - Displays the invited list of a member
 ▶ `inviteinfo` - Displays active invite codes
 
-Channel Configuration
-▶ `setjoinchannel #channel` - Set the welcome channel
-▶ `unsetwelcomechannel` - Disable welcome messages
-▶ `setleavechannel` - Set the leave channel
-▶ `unsetleavechannel` - Disable leave messages
-
-Message Configuration
-▶ `setjoinmessage` - Set custom join message
-▶ `unsetjoinmessage` - Delete join message
-▶ `setleavemessage` - Set custom leave message
-▶ `unsetleavemessage` - Delete leave message
-▶ `variables` - Show usable variables
-▶ `testmessage` - Preview join message
-
 Invite Management
 ▶ `addinvites @user amount` - Add invites
 ▶ `removeinvites @user amount` - Remove invites
@@ -3089,12 +2949,6 @@ Create 'Temporary Channels' for temp VCs
     embed.add_field(
         name="4️⃣ Create Ticket Panel",
         value="Use `!tickets` to create a ticket panel",
-        inline=False
-    )
-
-    embed.add_field(
-        name="5️⃣ Configure Welcome",
-        value="Set up welcome channel and auto-roles in bot configuration",
         inline=False
     )
 
