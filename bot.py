@@ -1287,13 +1287,15 @@ class InvitedUsersView(discord.ui.View):
         page_entries = self.entries[start:end]
 
         embed = discord.Embed(
-            title="Invited users",
+            title=f"Invited list of {self.target.display_name} !",
             description="\n".join(
                 f"#{index} • {entry}"
                 for index, entry in enumerate(page_entries, start=start + 1)
             ),
             color=INVITE_UI_COLOR,
         )
+        if not page_entries:
+            embed.description = "No invited users found."
         embed.set_thumbnail(url=self.target.display_avatar.url)
         embed.set_footer(text=f"Page {self.page + 1}/{self.total_pages}")
         return embed
@@ -2225,10 +2227,6 @@ async def invited_command(ctx, member: discord.Member = None):
 
     invited_users = get_invited_users(ctx.guild.id, target.id)
 
-    if not invited_users:
-        await ctx.send(f"{target.display_name} hasn't invited anyone.")
-        return
-
     entries = []
     for uid in invited_users:
         try:
@@ -2238,8 +2236,12 @@ async def invited_command(ctx, member: discord.Member = None):
             entries.append(f"User({uid})")
 
     view = InvitedUsersView(ctx.author.id, target, entries)
-    message = await ctx.send(embed=view.build_embed(), view=view)
-    view.message = message
+    if entries:
+        message = await ctx.send(embed=view.build_embed(), view=view)
+        view.message = message
+        return
+
+    await ctx.send(embed=view.build_embed())
 
 
 @bot.command(name="inviteinfo")
