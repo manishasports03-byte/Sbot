@@ -2339,14 +2339,16 @@ async def leaderboard_command(ctx, category: str = "invites"):
     if category in ["invites", "inv"]:
         leaderboard = get_leaderboard(ctx.guild.id, limit=10)
 
-        if not leaderboard:
-            await ctx.send("No invite data available yet.")
-            return
-
         embed = discord.Embed(
-            title="🏆 Invite Leaderboard",
-            color=discord.Color.gold()
+            title="Invite Leaderboard",
+            color=discord.Color.from_str("#2b2d31")
         )
+
+        if not leaderboard:
+            embed.description = "No invite data available yet."
+            embed.set_footer(text="Page 1/1")
+            await ctx.send(embed=embed)
+            return
 
         leaderboard_text = ""
         for rank, (user_id, count) in enumerate(leaderboard, start=1):
@@ -2361,7 +2363,7 @@ async def leaderboard_command(ctx, category: str = "invites"):
                 leaderboard_text += f"#{rank} User({user_id}) - **{count}** invite{'s' if count != 1 else ''}\n"
 
         embed.description = leaderboard_text
-        embed.set_footer(text=f"Total top inviters: {len(leaderboard)}")
+        embed.set_footer(text="Page 1/1")
         await ctx.send(embed=embed)
         return
 
