@@ -102,14 +102,74 @@ def save_cash_data(data):
 async def load_guild_prefixes():
     """Load guild prefixes from PostgreSQL into cache."""
     guild_prefix_cache.clear()
-    rows = await db.fetch("SELECT guild_id, prefix FROM guild_settings")
+    rows = await db_fetch("SELECT guild_id, prefix FROM guild_settings", log_fetch=False) or []
     for row in rows:
         guild_prefix_cache[row["guild_id"]] = row["prefix"] or DEFAULT_PREFIX
 
 
-async def init_database():
+async def db_execute(query, *args, log_context=None):
+    if db is None:
+        print("DATABASE ERROR: database pool is not available")
+        return None
+    try:
+        async with db.acquire() as conn:
+            result = await conn.execute(query, *args)
+            if log_context:
+                print(log_context)
+            return result
+    except Exception as e:
+        print("DATABASE ERROR:", e)
+        return None
+
+
+async def db_fetch(query, *args, log_fetch=True):
+    if db is None:
+        print("DATABASE ERROR: database pool is not available")
+        return []
+    try:
+        async with db.acquire() as conn:
+            result = await conn.fetch(query, *args)
+            if log_fetch:
+                print("Fetched data:", result)
+            return result
+    except Exception as e:
+        print("DATABASE ERROR:", e)
+        return []
+
+
+async def db_fetchrow(query, *args, log_fetch=True):
+    if db is None:
+        print("DATABASE ERROR: database pool is not available")
+        return None
+    try:
+        async with db.acquire() as conn:
+            result = await conn.fetchrow(query, *args)
+            if log_fetch:
+                print("Fetched data:", result)
+            return result
+    except Exception as e:
+        print("DATABASE ERROR:", e)
+        return None
+
+
+async def db_fetchval(query, *args, log_fetch=True):
+    if db is None:
+        print("DATABASE ERROR: database pool is not available")
+        return None
+    try:
+        async with db.acquire() as conn:
+            result = await conn.fetchval(query, *args)
+            if log_fetch:
+                print("Fetched data:", result)
+            return result
+    except Exception as e:
+        print("DATABASE ERROR:", e)
+        return None
+
+
+async def create_tables():
     """Initialize PostgreSQL tables for persistent bot stats"""
-    await db.execute("""
+    await db_execute("""
         CREATE TABLE IF NOT EXISTS invite_stats (
             guild_id BIGINT,
             user_id BIGINT,
@@ -117,7 +177,7 @@ async def init_database():
             PRIMARY KEY (guild_id, user_id)
         )
     """)
-    await db.execute("""
+    await db_execute("""
         CREATE TABLE IF NOT EXISTS inviter_map (
             guild_id BIGINT,
             user_id BIGINT,
@@ -125,7 +185,7 @@ async def init_database():
             PRIMARY KEY (guild_id, user_id)
         )
     """)
-    await db.execute("""
+    await db_execute("""
         CREATE TABLE IF NOT EXISTS message_stats (
             guild_id BIGINT,
             user_id BIGINT,
@@ -134,26 +194,26 @@ async def init_database():
             PRIMARY KEY (guild_id, user_id)
         )
     """)
-    await db.execute("""
+    await db_execute("""
         CREATE TABLE IF NOT EXISTS message_blacklist (
             guild_id BIGINT,
             channel_id BIGINT,
             PRIMARY KEY (guild_id, channel_id)
         )
     """)
-    await db.execute("""
+    await db_execute("""
         CREATE TABLE IF NOT EXISTS bot_state (
             key TEXT PRIMARY KEY,
             value TEXT
         )
     """)
-    await db.execute("""
+    await db_execute("""
         CREATE TABLE IF NOT EXISTS guild_settings (
             guild_id BIGINT PRIMARY KEY,
             prefix TEXT DEFAULT '.'
         )
     """)
-    await db.execute("""
+    await db_execute("""
         CREATE TABLE IF NOT EXISTS afk_users (
             guild_id BIGINT,
             user_id BIGINT,
@@ -162,26 +222,34 @@ async def init_database():
             PRIMARY KEY (guild_id, user_id)
         )
     """)
+    print("Tables ensured/created")
 
 
 async def connect_db():
     global db
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
-        raise RuntimeError("DATABASE_URL is not set")
+        print("DATABASE ERROR: DATABASE_URL is not set")
+        return
 
     if db is not None:
         return
 
-    db = await asyncpg.create_pool(database_url)
-    await init_database()
-    await load_guild_prefixes()
-    await load_afk_users()
-    print("Database initialized successfully")
+    print("Connecting to PostgreSQL...")
+    try:
+        db = await asyncpg.create_pool(database_url)
+        print("PostgreSQL connected successfully")
+        await create_tables()
+        await load_guild_prefixes()
+        await load_afk_users()
+        print("Database initialized successfully")
+    except Exception as e:
+        db = None
+        print("DATABASE ERROR:", e)
 
 async def get_invites(guild_id, user_id):
     """Get invite count for a user."""
-    return await db.fetchval(
+    return await db_fetchval(
         "SELECT invites FROM invite_stats WHERE guild_id = $1 AND user_id = $2",
         guild_id,
         user_id,
@@ -192,7 +260,7 @@ async def add_invites(guild_id, user_id, amount):
     """Add invites to a user."""
     current = await get_invites(guild_id, user_id)
     new_total = max(0, current + amount)
-    await db.execute(
+    await db_execute(
         """
         INSERT INTO invite_stats (guild_id, user_id, invites)
         VALUES ($1, $2, $3)
@@ -202,13 +270,14 @@ async def add_invites(guild_id, user_id, amount):
         guild_id,
         user_id,
         new_total,
+        log_context=f"Saved invites for user: {user_id}",
     )
     return new_total
 
 
 async def set_inviter(guild_id, user_id, inviter_id):
     """Set who invited a user."""
-    await db.execute(
+    await db_execute(
         """
         INSERT INTO inviter_map (guild_id, user_id, inviter_id)
         VALUES ($1, $2, $3)
@@ -218,12 +287,13 @@ async def set_inviter(guild_id, user_id, inviter_id):
         guild_id,
         user_id,
         inviter_id,
+        log_context=f"Saved inviter mapping for user: {user_id}",
     )
 
 
 async def get_inviter(guild_id, user_id):
     """Get who invited a user."""
-    return await db.fetchval(
+    return await db_fetchval(
         "SELECT inviter_id FROM inviter_map WHERE guild_id = $1 AND user_id = $2",
         guild_id,
         user_id,
@@ -232,7 +302,7 @@ async def get_inviter(guild_id, user_id):
 
 async def get_invited_users(guild_id, inviter_id):
     """Get list of users invited by someone."""
-    rows = await db.fetch(
+    rows = await db_fetch(
         "SELECT user_id FROM inviter_map WHERE guild_id = $1 AND inviter_id = $2 ORDER BY user_id",
         guild_id,
         inviter_id,
@@ -243,12 +313,12 @@ async def get_invited_users(guild_id, inviter_id):
 async def get_leaderboard(guild_id, limit=10):
     """Get top inviters for a guild."""
     if limit is None:
-        rows = await db.fetch(
+        rows = await db_fetch(
             "SELECT user_id, invites FROM invite_stats WHERE guild_id = $1 ORDER BY invites DESC, user_id ASC",
             guild_id,
         )
     else:
-        rows = await db.fetch(
+        rows = await db_fetch(
             "SELECT user_id, invites FROM invite_stats WHERE guild_id = $1 ORDER BY invites DESC, user_id ASC LIMIT $2",
             guild_id,
             limit,
@@ -258,25 +328,26 @@ async def get_leaderboard(guild_id, limit=10):
 
 async def clear_invite_data(guild_id):
     """Clear all invite data for a guild."""
-    await db.execute("DELETE FROM invite_stats WHERE guild_id = $1", guild_id)
-    await db.execute("DELETE FROM inviter_map WHERE guild_id = $1", guild_id)
+    await db_execute("DELETE FROM invite_stats WHERE guild_id = $1", guild_id, log_context=f"Cleared invite stats for guild: {guild_id}")
+    await db_execute("DELETE FROM inviter_map WHERE guild_id = $1", guild_id, log_context=f"Cleared inviter map for guild: {guild_id}")
 
 
 async def reset_user_invites(guild_id, user_id):
     """Reset invite count for one user."""
-    await db.execute(
+    await db_execute(
         "DELETE FROM invite_stats WHERE guild_id = $1 AND user_id = $2",
         guild_id,
         user_id,
+        log_context=f"Reset invites for user: {user_id}",
     )
 
 
 async def get_state_value(key):
-    return await db.fetchval("SELECT value FROM bot_state WHERE key = $1", key)
+    return await db_fetchval("SELECT value FROM bot_state WHERE key = $1", key)
 
 
 async def set_state_value(key, value):
-    await db.execute(
+    await db_execute(
         """
         INSERT INTO bot_state (key, value)
         VALUES ($1, $2)
@@ -285,6 +356,7 @@ async def set_state_value(key, value):
         """,
         key,
         value,
+        log_context=f"Saved bot state key: {key}",
     )
 
 
@@ -294,13 +366,13 @@ async def reset_daily_message_counts_if_needed():
     if last_reset == today:
         return
 
-    await db.execute("UPDATE message_stats SET daily_messages = 0")
+    await db_execute("UPDATE message_stats SET daily_messages = 0", log_context="Reset daily message counts")
     await set_state_value(MESSAGE_DAILY_RESET_KEY, today)
 
 
 async def get_message_stats(guild_id, user_id):
     await reset_daily_message_counts_if_needed()
-    row = await db.fetchrow(
+    row = await db_fetchrow(
         "SELECT messages, daily_messages FROM message_stats WHERE guild_id = $1 AND user_id = $2",
         guild_id,
         user_id,
@@ -311,7 +383,7 @@ async def get_message_stats(guild_id, user_id):
 
 
 async def set_message_stats(guild_id, user_id, messages, daily_messages):
-    await db.execute(
+    await db_execute(
         """
         INSERT INTO message_stats (guild_id, user_id, messages, daily_messages)
         VALUES ($1, $2, $3, $4)
@@ -324,6 +396,7 @@ async def set_message_stats(guild_id, user_id, messages, daily_messages):
         user_id,
         max(0, messages),
         max(0, daily_messages),
+        log_context=f"Saved message stats for user: {user_id}",
     )
 
 
@@ -346,7 +419,9 @@ async def increment_message_count(guild_id, user_id):
 
 async def add_message(guild_id, user_id):
     """Persist one newly observed message."""
-    return await increment_message_count(guild_id, user_id)
+    result = await increment_message_count(guild_id, user_id)
+    print("Saved message for user:", user_id)
+    return result
 
 
 async def get_messages(guild_id, user_id):
@@ -365,7 +440,7 @@ async def leaderboard_messages(guild_id, column="messages", limit=10):
 
 
 async def clear_all_messages(guild_id):
-    await db.execute("DELETE FROM message_stats WHERE guild_id = $1", guild_id)
+    await db_execute("DELETE FROM message_stats WHERE guild_id = $1", guild_id, log_context=f"Cleared message stats for guild: {guild_id}")
 
 
 async def reset_user_messages(guild_id, user_id):
@@ -378,7 +453,7 @@ async def get_message_leaderboard(guild_id, column="messages", limit=10):
 
     await reset_daily_message_counts_if_needed()
     if limit is None:
-        rows = await db.fetch(
+        rows = await db_fetch(
             f"""
             SELECT user_id, {column}
             FROM message_stats
@@ -388,7 +463,7 @@ async def get_message_leaderboard(guild_id, column="messages", limit=10):
             guild_id,
         )
     else:
-        rows = await db.fetch(
+        rows = await db_fetch(
             f"""
             SELECT user_id, {column}
             FROM message_stats
@@ -403,7 +478,7 @@ async def get_message_leaderboard(guild_id, column="messages", limit=10):
 
 
 async def blacklist_message_channel(guild_id, channel_id):
-    await db.execute(
+    await db_execute(
         """
         INSERT INTO message_blacklist (guild_id, channel_id)
         VALUES ($1, $2)
@@ -411,19 +486,21 @@ async def blacklist_message_channel(guild_id, channel_id):
         """,
         guild_id,
         channel_id,
+        log_context=f"Blacklisted message channel: {channel_id}",
     )
 
 
 async def unblacklist_message_channel(guild_id, channel_id):
-    await db.execute(
+    await db_execute(
         "DELETE FROM message_blacklist WHERE guild_id = $1 AND channel_id = $2",
         guild_id,
         channel_id,
+        log_context=f"Unblacklisted message channel: {channel_id}",
     )
 
 
 async def get_blacklisted_channels(guild_id):
-    rows = await db.fetch(
+    rows = await db_fetch(
         "SELECT channel_id FROM message_blacklist WHERE guild_id = $1 ORDER BY channel_id",
         guild_id,
     )
@@ -432,7 +509,7 @@ async def get_blacklisted_channels(guild_id):
 
 async def is_message_channel_blacklisted(guild_id, channel_id):
     return bool(
-        await db.fetchval(
+        await db_fetchval(
             "SELECT 1 FROM message_blacklist WHERE guild_id = $1 AND channel_id = $2",
             guild_id,
             channel_id,
@@ -459,7 +536,7 @@ def build_messages_usage_embed(ctx, command_name, usage):
 
 
 async def set_guild_prefix(guild_id, prefix):
-    await db.execute(
+    await db_execute(
         """
         INSERT INTO guild_settings (guild_id, prefix)
         VALUES ($1, $2)
@@ -468,12 +545,13 @@ async def set_guild_prefix(guild_id, prefix):
         """,
         guild_id,
         prefix,
+        log_context=f"Saved guild prefix for guild: {guild_id}",
     )
     guild_prefix_cache[guild_id] = prefix
 
 
 async def delete_guild_prefix(guild_id):
-    await db.execute("DELETE FROM guild_settings WHERE guild_id = $1", guild_id)
+    await db_execute("DELETE FROM guild_settings WHERE guild_id = $1", guild_id, log_context=f"Deleted guild prefix for guild: {guild_id}")
     guild_prefix_cache.pop(guild_id, None)
 
 
@@ -482,7 +560,7 @@ async def get_guild_prefix(guild_id):
         return DEFAULT_PREFIX
 
     return (
-        await db.fetchval(
+        await db_fetchval(
             "SELECT prefix FROM guild_settings WHERE guild_id = $1",
             guild_id,
         )
@@ -600,7 +678,7 @@ def cache_afk_state(guild_id, user_id, reason, timestamp, pings=None):
 
 
 async def save_afk_state(guild_id, user_id, reason, timestamp):
-    await db.execute(
+    await db_execute(
         """
         INSERT INTO afk_users (guild_id, user_id, reason, timestamp)
         VALUES ($1, $2, $3, $4)
@@ -613,6 +691,7 @@ async def save_afk_state(guild_id, user_id, reason, timestamp):
         user_id,
         reason,
         timestamp,
+        log_context=f"Saved AFK state for user: {user_id}",
     )
     return cache_afk_state(guild_id, user_id, reason, timestamp)
 
@@ -622,7 +701,7 @@ async def get_afk_state(guild_id, user_id):
     if key in afk_users:
         return afk_users[key]
 
-    row = await db.fetchrow(
+    row = await db_fetchrow(
         "SELECT reason, timestamp FROM afk_users WHERE guild_id = $1 AND user_id = $2",
         guild_id,
         user_id,
@@ -634,16 +713,17 @@ async def get_afk_state(guild_id, user_id):
 
 async def delete_afk_state(guild_id, user_id):
     afk_users.pop(afk_cache_key(guild_id, user_id), None)
-    await db.execute(
+    await db_execute(
         "DELETE FROM afk_users WHERE guild_id = $1 AND user_id = $2",
         guild_id,
         user_id,
+        log_context=f"Deleted AFK state for user: {user_id}",
     )
 
 
 async def load_afk_users():
     afk_users.clear()
-    rows = await db.fetch("SELECT guild_id, user_id, reason, timestamp FROM afk_users")
+    rows = await db_fetch("SELECT guild_id, user_id, reason, timestamp FROM afk_users")
     for row in rows:
         cache_afk_state(row["guild_id"], row["user_id"], row["reason"], row["timestamp"])
 
@@ -2000,6 +2080,25 @@ async def deleteprefix_command(ctx):
         description=f"Prefix reset to `{DEFAULT_PREFIX}`",
         color=discord.Color.orange()
     ))
+
+
+@bot.command(name="dbtest")
+async def dbtest_command(ctx):
+    """Temporary database verification command"""
+    if db is None:
+        await ctx.send("Database is not connected.")
+        return
+
+    test_key = f"dbtest:{ctx.guild.id if ctx.guild else 0}:{ctx.author.id}"
+    test_value = f"ok:{int(datetime.now(timezone.utc).timestamp())}"
+    await set_state_value(test_key, test_value)
+    saved_value = await get_state_value(test_key)
+
+    if saved_value == test_value:
+        await ctx.send("Database working correctly")
+        return
+
+    await ctx.send("Database test failed")
 
 
 @bot.command(name="gstart")
