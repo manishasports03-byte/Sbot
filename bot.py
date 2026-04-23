@@ -2746,19 +2746,28 @@ class ModuleView(discord.ui.View):
 
         elif selected == "messages":
             return discord.Embed(
-                title="📊 Messages Commands",
+                title="Messages",
                 color=discord.Color.from_str("#2b2d31"),
                 description="""
-`.messages [@user]` - Show total message count
-`.addmessages @user amount` - Add messages to a user
-`.removemessages @user amount` - Remove messages from a user
-`.blacklistchannel #channel` - Exclude a channel from tracking
-`.unblacklistchannel #channel` - Remove a blacklist entry
-`.blacklistedchannels` - Show blacklisted channels
-`.clearmessages` - Reset all message data
-`.resetmymessages` - Reset your own message count
-`.leaderboard messages` - Show top message senders
-`.leaderboard dailymessages` - Show top daily message senders
+Keeps the count of users' messages
+
+Core Commands
+▶ `messages [@user]` - Displays message count of a user
+
+Message Management
+▶ `addmessages @user amount` - Add messages
+▶ `removemessages @user amount` - Remove messages
+▶ `clearmessages` - Clear all message data
+▶ `resetmymessages` - Reset your messages
+
+Channel Control
+▶ `blacklistchannel #channel` - Exclude a channel
+▶ `unblacklistchannel #channel` - Remove blacklist
+▶ `blacklistedchannels` - Show blacklisted channels
+
+Leaderboards
+▶ `leaderboard messages` - Top message senders
+▶ `leaderboard dailymessages` - Top daily senders
                 """
             )
         
@@ -2893,19 +2902,28 @@ class HelpView(discord.ui.View):
 
         elif selected == "messages":
             return discord.Embed(
-                title="📊 Messages Commands",
+                title="Messages",
                 color=discord.Color.from_str("#2b2d31"),
                 description="""
-`.messages [@user]` - Show total message count
-`.addmessages @user amount` - Add messages to a user
-`.removemessages @user amount` - Remove messages from a user
-`.blacklistchannel #channel` - Exclude a channel from tracking
-`.unblacklistchannel #channel` - Remove a blacklist entry
-`.blacklistedchannels` - Show blacklisted channels
-`.clearmessages` - Reset all message data
-`.resetmymessages` - Reset your own message count
-`.leaderboard messages` - Show top message senders
-`.leaderboard dailymessages` - Show top daily message senders
+Keeps the count of users' messages
+
+Core Commands
+▶ `messages [@user]` - Displays message count of a user
+
+Message Management
+▶ `addmessages @user amount` - Add messages
+▶ `removemessages @user amount` - Remove messages
+▶ `clearmessages` - Clear all message data
+▶ `resetmymessages` - Reset your messages
+
+Channel Control
+▶ `blacklistchannel #channel` - Exclude a channel
+▶ `unblacklistchannel #channel` - Remove blacklist
+▶ `blacklistedchannels` - Show blacklisted channels
+
+Leaderboards
+▶ `leaderboard messages` - Top message senders
+▶ `leaderboard dailymessages` - Top daily senders
                 """
             )
         
