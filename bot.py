@@ -2825,28 +2825,39 @@ class ModuleView(discord.ui.View):
         
         elif selected == "invites":
             return discord.Embed(
-                title="📨 Invite Commands",
+                title="Invite logger / Invite tracker",
                 color=discord.Color.from_str("#2b2d31"),
                 description="""
-`.invites [@user]` - Show a user's invite stats
-`.inviter [@user]` - Show who invited a user
-`.invited [@user]` - List users invited by someone
-`.inviteinfo` - Show active invite links
-`.setjoinchannel #channel` - Set the join log channel
-`.unsetwelcomechannel` - Remove the join log channel
-`.setleavechannel` - Set the leave log channel
-`.unsetleavechannel` - Remove the leave log channel
-`.setjoinmessage` - Set the join message template
-`.unsetjoinmessage` - Reset the join message template
-`.setleavemessage` - Set the leave message template
-`.unsetleavemessage` - Reset the leave message template
-`.variables` - Show available message variables
-`.testmessage` - Preview the configured message
-`.addinvites @user amount` - Add invites to a user
-`.removeinvites @user amount` - Remove invites from a user
-`.clearinvites` - Clear invite data
-`.resetmyinvites` - Reset your own invites
-`.leaderboard invites` - Show the invite leaderboard
+Tracks and logs the server invites
+
+Core Commands
+▶ `invites [@user]` - Displays the invites stats of a member
+▶ `inviter [@user]` - Displays the inviter of a server member
+▶ `invited [@user]` - Displays the invited list of a member
+▶ `inviteinfo` - Displays active invite codes
+
+Channel Configuration
+▶ `setjoinchannel #channel` - Set the welcome channel
+▶ `unsetwelcomechannel` - Disable welcome messages
+▶ `setleavechannel` - Set the leave channel
+▶ `unsetleavechannel` - Disable leave messages
+
+Message Configuration
+▶ `setjoinmessage` - Set custom join message
+▶ `unsetjoinmessage` - Delete join message
+▶ `setleavemessage` - Set custom leave message
+▶ `unsetleavemessage` - Delete leave message
+▶ `variables` - Show usable variables
+▶ `testmessage` - Preview join message
+
+Invite Management
+▶ `addinvites @user amount` - Add invites
+▶ `removeinvites @user amount` - Remove invites
+▶ `clearinvites` - Clear invite data
+▶ `resetmyinvites` - Reset your invites
+
+Leaderboard
+▶ `leaderboard invites` - Show top inviters
                 """
             )
         
@@ -2975,28 +2986,39 @@ class HelpView(discord.ui.View):
         
         elif selected == "invites":
             return discord.Embed(
-                title="📨 Invite Commands",
+                title="Invite logger / Invite tracker",
                 color=discord.Color.from_str("#2b2d31"),
                 description="""
-`.invites [@user]` - Show a user's invite stats
-`.inviter [@user]` - Show who invited a user
-`.invited [@user]` - List users invited by someone
-`.inviteinfo` - Show active invite links
-`.setjoinchannel #channel` - Set the join log channel
-`.unsetwelcomechannel` - Remove the join log channel
-`.setleavechannel` - Set the leave log channel
-`.unsetleavechannel` - Remove the leave log channel
-`.setjoinmessage` - Set the join message template
-`.unsetjoinmessage` - Reset the join message template
-`.setleavemessage` - Set the leave message template
-`.unsetleavemessage` - Reset the leave message template
-`.variables` - Show available message variables
-`.testmessage` - Preview the configured message
-`.addinvites @user amount` - Add invites to a user
-`.removeinvites @user amount` - Remove invites from a user
-`.clearinvites` - Clear invite data
-`.resetmyinvites` - Reset your own invites
-`.leaderboard invites` - Show the invite leaderboard
+Tracks and logs the server invites
+
+Core Commands
+▶ `invites [@user]` - Displays the invites stats of a member
+▶ `inviter [@user]` - Displays the inviter of a server member
+▶ `invited [@user]` - Displays the invited list of a member
+▶ `inviteinfo` - Displays active invite codes
+
+Channel Configuration
+▶ `setjoinchannel #channel` - Set the welcome channel
+▶ `unsetwelcomechannel` - Disable welcome messages
+▶ `setleavechannel` - Set the leave channel
+▶ `unsetleavechannel` - Disable leave messages
+
+Message Configuration
+▶ `setjoinmessage` - Set custom join message
+▶ `unsetjoinmessage` - Delete join message
+▶ `setleavemessage` - Set custom leave message
+▶ `unsetleavemessage` - Delete leave message
+▶ `variables` - Show usable variables
+▶ `testmessage` - Preview join message
+
+Invite Management
+▶ `addinvites @user amount` - Add invites
+▶ `removeinvites @user amount` - Remove invites
+▶ `clearinvites` - Clear invite data
+▶ `resetmyinvites` - Reset your invites
+
+Leaderboard
+▶ `leaderboard invites` - Show top inviters
                 """
             )
         
