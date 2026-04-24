@@ -855,6 +855,11 @@ class StealAssetView(discord.ui.View):
             embed=build_asset_embed("Steal Asset", "✅ Emoji added successfully."),
             ephemeral=True,
         )
+        try:
+            await interaction.message.delete()
+        except discord.HTTPException:
+            pass
+        self.stop()
 
     async def _add_as_sticker(self, interaction: discord.Interaction):
         guild = interaction.guild
@@ -909,6 +914,11 @@ class StealAssetView(discord.ui.View):
             embed=build_asset_embed("Steal Asset", "✅ Sticker added successfully."),
             ephemeral=True,
         )
+        try:
+            await interaction.message.delete()
+        except discord.HTTPException:
+            pass
+        self.stop()
 
     @discord.ui.button(label="Add as Emoji", style=discord.ButtonStyle.secondary)
     async def add_as_emoji(self, interaction: discord.Interaction, button: discord.ui.Button):
