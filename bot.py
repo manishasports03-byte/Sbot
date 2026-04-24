@@ -53,6 +53,7 @@ NO_PREFIX_COMMANDS = {
     "addinvites", "removeinvites", "clearinvites", "resetmyinvites",
     "messages", "m", "addmessages", "removemessages",
     "blacklistchannel", "unblacklistchannel", "blacklistedchannels", "clearmessages", "resetmymessages",
+    "autoresponder", "autoreact", "sticky",
     "lb", "leaderboard",
     "warn", "mute", "unmute", "kick", "ban", "purge", "slowmode",
     "gstart", "gend", "greroll",
@@ -80,6 +81,9 @@ TICKET_PANEL_MESSAGE_KEY = "ticket_panel_message_id"
 TICKET_PANEL_TITLE = "Create Ticket"
 TICKET_BUTTON_COOLDOWN_SECONDS = 15
 ticket_button_cooldowns = {}
+MEDIA_ONLY_CHANNEL_ID = 1379065330957160560
+AUTORESPONDER_COOLDOWN_SECONDS = 2
+autoresponder_cooldowns = {}
 
 # ===== GIVEAWAY CONFIG =====
 giveaways = {}  # {message_id: {"message_id": int, "channel_id": int, "guild_id": int, "end_time": datetime, "winners": int, "prize": str, "ended": bool, "task": asyncio.Task | None}}
@@ -89,11 +93,6 @@ spam_tracker = defaultdict(list)  # {user_id: [timestamps]}
 SPAM_THRESHOLD = 5  # messages in SPAM_WINDOW
 SPAM_WINDOW = 5  # seconds
 SPAM_MUTE_DURATION = 300  # 5 minutes
-
-# Raid detection
-raid_tracker = {}  # {guild_id: {"joins": [], "started_at": datetime}}
-RAID_JOIN_THRESHOLD = 10  # joins in RAID_WINDOW
-RAID_WINDOW = 60  # seconds
 
 # ===== MODERATION CONFIG =====
 warnings = defaultdict(lambda: defaultdict(int))  # {guild_id: {user_id: count}}
@@ -220,6 +219,34 @@ async def create_tables():
             reason TEXT,
             timestamp BIGINT,
             PRIMARY KEY (guild_id, user_id)
+        )
+    """)
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS custom_role_settings (
+            guild_id BIGINT PRIMARY KEY,
+            role_id BIGINT
+        )
+    """)
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS autoresponders (
+            guild_id BIGINT,
+            trigger TEXT,
+            response TEXT,
+            PRIMARY KEY (guild_id, trigger)
+        )
+    """)
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS auto_reactions (
+            guild_id BIGINT,
+            trigger TEXT,
+            emoji TEXT,
+            PRIMARY KEY (guild_id, trigger)
+        )
+    """)
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS sticky_messages (
+            guild_id BIGINT PRIMARY KEY,
+            message TEXT
         )
     """)
     print("Tables ensured/created")
@@ -357,6 +384,139 @@ async def set_state_value(key, value):
         key,
         value,
         log_context=f"Saved bot state key: {key}",
+    )
+
+
+async def set_custom_role(guild_id, role_id):
+    await db_execute(
+        """
+        INSERT INTO custom_role_settings (guild_id, role_id)
+        VALUES ($1, $2)
+        ON CONFLICT (guild_id)
+        DO UPDATE SET role_id = EXCLUDED.role_id
+        """,
+        guild_id,
+        role_id,
+        log_context=f"Saved custom role for guild: {guild_id}",
+    )
+
+
+async def remove_custom_role(guild_id, role_id=None):
+    if role_id is None:
+        await db_execute(
+            "DELETE FROM custom_role_settings WHERE guild_id = $1",
+            guild_id,
+            log_context=f"Removed custom role config for guild: {guild_id}",
+        )
+        return
+
+    await db_execute(
+        "DELETE FROM custom_role_settings WHERE guild_id = $1 AND role_id = $2",
+        guild_id,
+        role_id,
+        log_context=f"Removed custom role {role_id} for guild: {guild_id}",
+    )
+
+
+async def get_custom_role_id(guild_id):
+    return await db_fetchval(
+        "SELECT role_id FROM custom_role_settings WHERE guild_id = $1",
+        guild_id,
+    )
+
+
+async def add_autoresponder(guild_id, trigger, response):
+    normalized_trigger = trigger.lower()
+    await db_execute(
+        """
+        INSERT INTO autoresponders (guild_id, trigger, response)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id, trigger)
+        DO UPDATE SET response = EXCLUDED.response
+        """,
+        guild_id,
+        normalized_trigger,
+        response,
+        log_context=f"Saved autoresponder '{normalized_trigger}' for guild: {guild_id}",
+    )
+
+
+async def remove_autoresponder(guild_id, trigger):
+    await db_execute(
+        "DELETE FROM autoresponders WHERE guild_id = $1 AND trigger = $2",
+        guild_id,
+        trigger.lower(),
+        log_context=f"Removed autoresponder '{trigger.lower()}' for guild: {guild_id}",
+    )
+
+
+async def get_autoresponders(guild_id):
+    rows = await db_fetch(
+        "SELECT trigger, response FROM autoresponders WHERE guild_id = $1 ORDER BY trigger ASC",
+        guild_id,
+    )
+    return [(row["trigger"], row["response"]) for row in rows]
+
+
+async def add_auto_reaction(guild_id, trigger, emoji):
+    normalized_trigger = trigger.lower()
+    await db_execute(
+        """
+        INSERT INTO auto_reactions (guild_id, trigger, emoji)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id, trigger)
+        DO UPDATE SET emoji = EXCLUDED.emoji
+        """,
+        guild_id,
+        normalized_trigger,
+        emoji,
+        log_context=f"Saved autoreact '{normalized_trigger}' for guild: {guild_id}",
+    )
+
+
+async def remove_auto_reaction(guild_id, trigger):
+    await db_execute(
+        "DELETE FROM auto_reactions WHERE guild_id = $1 AND trigger = $2",
+        guild_id,
+        trigger.lower(),
+        log_context=f"Removed autoreact '{trigger.lower()}' for guild: {guild_id}",
+    )
+
+
+async def get_auto_reactions(guild_id):
+    rows = await db_fetch(
+        "SELECT trigger, emoji FROM auto_reactions WHERE guild_id = $1 ORDER BY trigger ASC",
+        guild_id,
+    )
+    return [(row["trigger"], row["emoji"]) for row in rows]
+
+
+async def set_sticky_message(guild_id, message):
+    await db_execute(
+        """
+        INSERT INTO sticky_messages (guild_id, message)
+        VALUES ($1, $2)
+        ON CONFLICT (guild_id)
+        DO UPDATE SET message = EXCLUDED.message
+        """,
+        guild_id,
+        message,
+        log_context=f"Saved sticky message for guild: {guild_id}",
+    )
+
+
+async def remove_sticky_message(guild_id):
+    await db_execute(
+        "DELETE FROM sticky_messages WHERE guild_id = $1",
+        guild_id,
+        log_context=f"Removed sticky message for guild: {guild_id}",
+    )
+
+
+async def get_sticky_message(guild_id):
+    return await db_fetchval(
+        "SELECT message FROM sticky_messages WHERE guild_id = $1",
+        guild_id,
     )
 
 
@@ -535,6 +695,26 @@ def build_messages_usage_embed(ctx, command_name, usage):
     )
 
 
+def build_moderation_embed(ctx, title, description, success=True):
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=discord.Color.green() if success else discord.Color.red(),
+    )
+    embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
+    return embed
+
+
+def build_automation_embed(ctx, title, description, success=True):
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=discord.Color.from_str("#2b2d31") if success else discord.Color.red(),
+    )
+    embed.set_footer(text=f"Requested by {ctx.author.display_name}")
+    return embed
+
+
 async def set_guild_prefix(guild_id, prefix):
     await db_execute(
         """
@@ -636,17 +816,6 @@ async def cache_server_invites(guild):
         print(f"✅ Cached {len(invites)} invites for {guild.name}")
     except discord.Forbidden:
         print(f"⚠️ No permission to view invites in {guild.name}")
-
-def is_raid_happening(guild_id):
-    """Check if raid is in progress"""
-    if guild_id not in raid_tracker:
-        return False
-    
-    data = raid_tracker[guild_id]
-    now = datetime.now(timezone.utc)
-    recent_joins = [t for t in data.get("joins", []) if (now - t).total_seconds() < RAID_WINDOW]
-    
-    return len(recent_joins) >= RAID_JOIN_THRESHOLD
 
 def check_spam(user_id):
     """Check if user is spamming"""
@@ -1988,30 +2157,11 @@ async def on_ready():
         print(f"Failed to sync commands: {e}")
 
 
-# ===== MEMBER JOIN EVENT - Anti-Raid & Auto-Role =====
+# ===== MEMBER JOIN EVENT =====
 @bot.event
 async def on_member_join(member):
-    """Handle member join - check for raids, assign auto-roles, and track invites"""
+    """Handle member join and track invites"""
     guild = member.guild
-
-    # ===== RAID DETECTION =====
-    if guild.id not in raid_tracker:
-        raid_tracker[guild.id] = {"joins": [], "started_at": datetime.now(timezone.utc)}
-
-    raid_tracker[guild.id]["joins"].append(datetime.now(timezone.utc))
-
-    # Check if raid is happening
-    if is_raid_happening(guild.id):
-        print(f"⚠️ RAID DETECTED in {guild.name}! User: {member}")
-        # Auto-ban if account is too new
-        account_age = datetime.now(timezone.utc) - member.created_at
-        if account_age.total_seconds() < 3600:  # Less than 1 hour old
-            try:
-                await member.ban(reason="Raid protection - new account")
-                log_moderation_action(guild.id, "ban", "System", member, "Raid protection - new account")
-                print(f"🛡️ Banned {member} for raid protection")
-            except:
-                pass
 
     # ===== INVITE TRACKING =====
     try:
@@ -2041,11 +2191,6 @@ async def on_member_join(member):
         pass
     except Exception as e:
         print(f"Error tracking invite for {member}: {e}")
-
-    # ===== AUTO-ROLES =====
-    # You can configure auto-roles by editing this section
-    # Example: new_member_role = guild.get_role(ROLE_ID)
-    # await member.add_roles(new_member_role)
 
 
 # ===== TEMP VC SYSTEM =====
@@ -2673,11 +2818,11 @@ async def gend_error(ctx, error):
 async def warn_command(ctx, member: MemberOrID, *, reason="No reason provided"):
     """Warn a member"""
     if member == ctx.author:
-        await ctx.send("You cannot warn yourself.")
+        await ctx.send(embed=build_moderation_embed(ctx, "Warning Failed", "You cannot warn yourself.", success=False))
         return
 
     if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
-        await ctx.send("You cannot warn someone with a higher or equal role.")
+        await ctx.send(embed=build_moderation_embed(ctx, "Warning Failed", "You cannot warn someone with a higher or equal role.", success=False))
         return
 
     warnings[ctx.guild.id][member.id] += 1
@@ -2685,11 +2830,12 @@ async def warn_command(ctx, member: MemberOrID, *, reason="No reason provided"):
     log_moderation_action(ctx.guild.id, "warn", ctx.author, member, reason)
 
     embed = discord.Embed(
-        title="⚠️ Warning",
-        description=f"{member.mention} has been warned.\n\nWarning Count: **{warn_count}**",
-        color=discord.Color.orange()
+        title="User Warned",
+        description=f"Warned {member.mention}\nWarning Count: {warn_count}",
+        color=discord.Color.green()
     )
     embed.add_field(name="Reason", value=reason, inline=False)
+    embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
 
     await ctx.send(embed=embed)
 
@@ -2708,7 +2854,7 @@ async def mute_command(ctx, member: MemberOrID, duration: str = "10m", *, reason
 async def mute_member(ctx, member: discord.Member, duration: str = "10m", reason="No reason provided"):
     """Internal function to mute a member"""
     if member == ctx.author:
-        await ctx.send("You cannot mute yourself.")
+        await ctx.send(embed=build_moderation_embed(ctx, "Mute Failed", "You cannot mute yourself.", success=False))
         return
 
     # Parse duration
@@ -2725,16 +2871,11 @@ async def mute_member(ctx, member: discord.Member, duration: str = "10m", reason
     try:
         await member.timeout(mute_duration, reason=reason)
         log_moderation_action(ctx.guild.id, "mute", ctx.author, member, reason)
-        
-        embed = discord.Embed(
-            title="🔇 Member Muted",
-            description=f"{member.mention} has been muted for {duration}",
-            color=discord.Color.red()
-        )
+        embed = build_moderation_embed(ctx, "User Muted", f"Muted {member.mention} for {duration}")
         embed.add_field(name="Reason", value=reason, inline=False)
         await ctx.send(embed=embed)
     except discord.Forbidden:
-        await ctx.send("I don't have permission to mute this member.")
+        await ctx.send(embed=build_moderation_embed(ctx, "Mute Failed", "I don't have permission to mute this member.", success=False))
 
 
 @bot.command(name="unmute")
@@ -2744,15 +2885,9 @@ async def unmute_command(ctx, member: MemberOrID):
     try:
         await member.timeout(None)
         log_moderation_action(ctx.guild.id, "unmute", ctx.author, member, "Manual unmute")
-        
-        embed = discord.Embed(
-            title="🔊 Member Unmuted",
-            description=f"{member.mention} has been unmuted",
-            color=discord.Color.green()
-        )
-        await ctx.send(embed=embed)
+        await ctx.send(embed=build_moderation_embed(ctx, "User Unmuted", f"Unmuted {member.mention}"))
     except discord.Forbidden:
-        await ctx.send("I don't have permission to unmute this member.")
+        await ctx.send(embed=build_moderation_embed(ctx, "Unmute Failed", "I don't have permission to unmute this member.", success=False))
 
 
 @bot.command(name="kick")
@@ -2760,26 +2895,21 @@ async def unmute_command(ctx, member: MemberOrID):
 async def kick_command(ctx, member: MemberOrID, *, reason="No reason provided"):
     """Kick a member from the server"""
     if member == ctx.author:
-        await ctx.send("You cannot kick yourself.")
+        await ctx.send(embed=build_moderation_embed(ctx, "Kick Failed", "You cannot kick yourself.", success=False))
         return
 
     if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
-        await ctx.send("You cannot kick someone with a higher or equal role.")
+        await ctx.send(embed=build_moderation_embed(ctx, "Kick Failed", "You cannot kick someone with a higher or equal role.", success=False))
         return
 
     try:
         await member.kick(reason=reason)
         log_moderation_action(ctx.guild.id, "kick", ctx.author, member, reason)
-        
-        embed = discord.Embed(
-            title="👢 Member Kicked",
-            description=f"{member} has been kicked from the server",
-            color=discord.Color.red()
-        )
+        embed = build_moderation_embed(ctx, "User Kicked", f"Kicked {member.mention}")
         embed.add_field(name="Reason", value=reason, inline=False)
         await ctx.send(embed=embed)
     except discord.Forbidden:
-        await ctx.send("I don't have permission to kick this member.")
+        await ctx.send(embed=build_moderation_embed(ctx, "Kick Failed", "I don't have permission to kick this member.", success=False))
 
 
 @bot.command(name="ban")
@@ -2787,26 +2917,21 @@ async def kick_command(ctx, member: MemberOrID, *, reason="No reason provided"):
 async def ban_command(ctx, member: MemberOrID, *, reason="No reason provided"):
     """Ban a member from the server"""
     if member == ctx.author:
-        await ctx.send("You cannot ban yourself.")
+        await ctx.send(embed=build_moderation_embed(ctx, "Ban Failed", "You cannot ban yourself.", success=False))
         return
 
     if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
-        await ctx.send("You cannot ban someone with a higher or equal role.")
+        await ctx.send(embed=build_moderation_embed(ctx, "Ban Failed", "You cannot ban someone with a higher or equal role.", success=False))
         return
 
     try:
         await member.ban(reason=reason)
         log_moderation_action(ctx.guild.id, "ban", ctx.author, member, reason)
-        
-        embed = discord.Embed(
-            title="🚫 Member Banned",
-            description=f"{member} has been banned from the server",
-            color=discord.Color.dark_red()
-        )
+        embed = build_moderation_embed(ctx, "User Banned", f"Banned {member}")
         embed.add_field(name="Reason", value=reason, inline=False)
         await ctx.send(embed=embed)
     except discord.Forbidden:
-        await ctx.send("I don't have permission to ban this member.")
+        await ctx.send(embed=build_moderation_embed(ctx, "Ban Failed", "I don't have permission to ban this member.", success=False))
 
 
 @bot.command(name="purge")
@@ -2814,15 +2939,18 @@ async def ban_command(ctx, member: MemberOrID, *, reason="No reason provided"):
 async def purge_command(ctx, amount: int = 10):
     """Delete messages from the channel"""
     if amount < 1 or amount > 100:
-        await ctx.send("Please specify between 1 and 100 messages to delete.")
+        await ctx.send(embed=build_moderation_embed(ctx, "Purge Failed", "Please specify between 1 and 100 messages to delete.", success=False))
         return
 
     try:
         deleted = await ctx.channel.purge(limit=amount + 1)
-        await ctx.send(f"🗑️ Deleted {len(deleted) - 1} messages.", delete_after=5)
+        await ctx.send(
+            embed=build_moderation_embed(ctx, "Messages Purged", f"Deleted {len(deleted) - 1} messages."),
+            delete_after=5,
+        )
         log_moderation_action(ctx.guild.id, "purge", ctx.author, "system", f"Deleted {len(deleted) - 1} messages")
     except discord.Forbidden:
-        await ctx.send("I don't have permission to delete messages.")
+        await ctx.send(embed=build_moderation_embed(ctx, "Purge Failed", "I don't have permission to delete messages.", success=False))
 
 
 @bot.command(name="slowmode")
@@ -2830,18 +2958,171 @@ async def purge_command(ctx, amount: int = 10):
 async def slowmode_command(ctx, seconds: int = 0):
     """Set slowmode for the channel (0 to disable)"""
     if seconds < 0 or seconds > 21600:
-        await ctx.send("Slowmode must be between 0 and 21600 seconds.")
+        await ctx.send(embed=build_moderation_embed(ctx, "Slowmode Failed", "Slowmode must be between 0 and 21600 seconds.", success=False))
         return
 
     try:
         await ctx.channel.edit(slowmode_delay=seconds)
         if seconds == 0:
-            await ctx.send("Slowmode disabled.")
+            await ctx.send(embed=build_moderation_embed(ctx, "Slowmode Updated", "Slowmode disabled."))
         else:
-            await ctx.send(f"Slowmode set to {seconds} seconds.")
+            await ctx.send(embed=build_moderation_embed(ctx, "Slowmode Updated", f"Slowmode set to {seconds} seconds."))
         log_moderation_action(ctx.guild.id, "slowmode", ctx.author, "channel", f"Set to {seconds}s")
     except discord.Forbidden:
-        await ctx.send("I don't have permission to modify this channel.")
+        await ctx.send(embed=build_moderation_embed(ctx, "Slowmode Failed", "I don't have permission to modify this channel.", success=False))
+
+
+@bot.group(name="autoresponder", invoke_without_command=True)
+@commands.has_permissions(manage_guild=True)
+async def autoresponder_command(ctx):
+    await ctx.send(embed=build_automation_embed(
+        ctx,
+        "Autoresponder",
+        "Usage: `.autoresponder <add | remove | show>`",
+        success=False,
+    ))
+
+
+@autoresponder_command.command(name="add")
+@commands.has_permissions(manage_guild=True)
+async def autoresponder_add_command(ctx, trigger: str, *, response: str):
+    await add_autoresponder(ctx.guild.id, trigger, response)
+    await ctx.send(embed=build_automation_embed(
+        ctx,
+        "Autoresponder",
+        f"Saved autoresponder for `{trigger.lower()}`.",
+    ))
+
+
+@autoresponder_command.command(name="remove")
+@commands.has_permissions(manage_guild=True)
+async def autoresponder_remove_command(ctx, *, trigger: str):
+    await remove_autoresponder(ctx.guild.id, trigger)
+    await ctx.send(embed=build_automation_embed(
+        ctx,
+        "Autoresponder",
+        f"Removed autoresponder for `{trigger.lower()}`.",
+    ))
+
+
+@autoresponder_command.command(name="show")
+@commands.has_permissions(manage_guild=True)
+async def autoresponder_show_command(ctx):
+    responders = await get_autoresponders(ctx.guild.id)
+    if not responders:
+        await ctx.send(embed=build_automation_embed(ctx, "Autoresponder", "No autoresponders configured."))
+        return
+
+    lines = [f"▶ `{trigger}` → {response}" for trigger, response in responders[:20]]
+    await ctx.send(embed=build_automation_embed(ctx, "Autoresponder", "\n".join(lines)))
+
+
+@bot.group(name="autoreact", invoke_without_command=True)
+@commands.has_permissions(manage_guild=True)
+async def autoreact_command(ctx):
+    await ctx.send(embed=build_automation_embed(
+        ctx,
+        "Autoreact",
+        "Usage: `.autoreact <add | remove | show>`",
+        success=False,
+    ))
+
+
+@autoreact_command.command(name="add")
+@commands.has_permissions(manage_guild=True)
+async def autoreact_add_command(ctx, trigger: str, emoji: str):
+    await add_auto_reaction(ctx.guild.id, trigger, emoji)
+    await ctx.send(embed=build_automation_embed(
+        ctx,
+        "Autoreact",
+        f"Saved auto reaction for `{trigger.lower()}`.",
+    ))
+
+
+@autoreact_command.command(name="remove")
+@commands.has_permissions(manage_guild=True)
+async def autoreact_remove_command(ctx, *, trigger: str):
+    await remove_auto_reaction(ctx.guild.id, trigger)
+    await ctx.send(embed=build_automation_embed(
+        ctx,
+        "Autoreact",
+        f"Removed auto reaction for `{trigger.lower()}`.",
+    ))
+
+
+@autoreact_command.command(name="show")
+@commands.has_permissions(manage_guild=True)
+async def autoreact_show_command(ctx):
+    reactions = await get_auto_reactions(ctx.guild.id)
+    if not reactions:
+        await ctx.send(embed=build_automation_embed(ctx, "Autoreact", "No auto reactions configured."))
+        return
+
+    lines = [f"▶ `{trigger}` → {emoji}" for trigger, emoji in reactions[:20]]
+    await ctx.send(embed=build_automation_embed(ctx, "Autoreact", "\n".join(lines)))
+
+
+@bot.group(name="sticky", invoke_without_command=True)
+@commands.has_permissions(manage_guild=True)
+async def sticky_command(ctx):
+    await ctx.send(embed=build_automation_embed(
+        ctx,
+        "Sticky Message",
+        "Usage: `.sticky <set | remove | show>`",
+        success=False,
+    ))
+
+
+@sticky_command.command(name="set")
+@commands.has_permissions(manage_guild=True)
+async def sticky_set_command(ctx, *, message_text: str):
+    await set_sticky_message(ctx.guild.id, message_text)
+    await ctx.send(embed=build_automation_embed(ctx, "Sticky Message", "Sticky message saved."))
+
+
+@sticky_command.command(name="remove")
+@commands.has_permissions(manage_guild=True)
+async def sticky_remove_command(ctx):
+    await remove_sticky_message(ctx.guild.id)
+    await ctx.send(embed=build_automation_embed(ctx, "Sticky Message", "Sticky message removed."))
+
+
+@sticky_command.command(name="show")
+@commands.has_permissions(manage_guild=True)
+async def sticky_show_command(ctx):
+    sticky_message = await get_sticky_message(ctx.guild.id)
+    if not sticky_message:
+        await ctx.send(embed=build_automation_embed(ctx, "Sticky Message", "No sticky message configured."))
+        return
+
+    await ctx.send(embed=build_automation_embed(ctx, "Sticky Message", sticky_message))
+
+
+@autoresponder_add_command.error
+@autoresponder_remove_command.error
+@autoreact_add_command.error
+@autoreact_remove_command.error
+@sticky_set_command.error
+@setup_role_command.error
+@setup_role_remove_command.error
+async def automation_command_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(embed=build_automation_embed(
+            ctx,
+            "Missing required argument(s).",
+            "Check the command usage in the help menu.",
+            success=False,
+        ))
+        return
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(embed=build_automation_embed(
+            ctx,
+            "Invalid argument.",
+            "Check the command usage in the help menu.",
+            success=False,
+        ))
+        return
+    raise error
 
 
 @bot.command(name="tickets")
@@ -3351,6 +3632,15 @@ async def on_message(message):
         return
 
     msg = message.content.lower()
+    current_prefix = get_command_prefix(bot, message)
+    first_word = message.content.split(maxsplit=1)[0].lower() if message.content.strip() else ""
+    is_admin_user = bool(
+        message.guild
+        and (
+            message.author.guild_permissions.administrator
+            or message.author.guild_permissions.manage_guild
+        )
+    )
     no_prefix_blocked_channel = (
         message.guild is not None
         and message.channel.id == NO_PREFIX_DISABLED_CHANNEL_ID
@@ -3358,15 +3648,24 @@ async def on_message(message):
 
     if (
         message.guild
+        and message.channel.id == MEDIA_ONLY_CHANNEL_ID
         and not message.author.bot
-        and not message.content.startswith(DEFAULT_PREFIX)
+        and not message.attachments
+        and not message.embeds
+    ):
+        try:
+            await message.delete()
+        except discord.HTTPException:
+            pass
+        await message.channel.send("This channel is for media only.", delete_after=5)
+        return
+
+    if (
+        message.guild
+        and not message.author.bot
+        and not message.content.startswith(current_prefix)
         and not no_prefix_blocked_channel
     ):
-        first_word = message.content.split(maxsplit=1)[0].lower() if message.content.strip() else ""
-        is_admin_user = (
-            message.author.guild_permissions.administrator
-            or message.author.guild_permissions.manage_guild
-        )
         if is_admin_user and first_word in NO_PREFIX_COMMANDS:
             prefixed_message = copy.copy(message)
             prefixed_message.content = f"{DEFAULT_PREFIX}{message.content}"
@@ -3483,6 +3782,28 @@ async def on_message(message):
                 f"{reason_text}"
             )
             continue
+
+    if message.guild and not message.author.bot:
+        is_command_message = message.content.startswith(current_prefix) or (
+            is_admin_user and first_word in NO_PREFIX_COMMANDS and not no_prefix_blocked_channel
+        )
+        if not is_command_message:
+            for trigger, emoji in await get_auto_reactions(message.guild.id):
+                if trigger in msg:
+                    try:
+                        await message.add_reaction(emoji)
+                    except discord.HTTPException:
+                        pass
+
+            responder_allowed_at = autoresponder_cooldowns.get(message.author.id)
+            if responder_allowed_at is None or datetime.now(timezone.utc) >= responder_allowed_at:
+                for trigger, response in await get_autoresponders(message.guild.id):
+                    if trigger in msg:
+                        autoresponder_cooldowns[message.author.id] = (
+                            datetime.now(timezone.utc) + timedelta(seconds=AUTORESPONDER_COOLDOWN_SECONDS)
+                        )
+                        await message.channel.send(response)
+                        break
 
     await bot.process_commands(message)
 
@@ -3848,7 +4169,7 @@ def get_main_help_embed():
 A powerful multipurpose bot with fast and reliable features
 
 • **Prefix:** `.`
-• **Total Commands:** 25+
+• **Total Commands:** 35+
 
 • **Choose a category:**
 
@@ -3858,7 +4179,9 @@ A powerful multipurpose bot with fast and reliable features
 📊 Messages
 📨 Invites
 🎁 Giveaway
-⚡ Features"""
+🤖 Automation
+🎭 Roles
+📁 Media"""
     embed.set_footer(text="Made with ❤️ by @_anuneet1x ")
     return embed
 
@@ -3976,21 +4299,44 @@ Leaderboard
     if selected == "giveaway":
         return get_giveaway_help_embed()
 
-    if selected == "features":
+    if selected == "automation":
         return discord.Embed(
-            title="⚡ Features",
+            title="Automation",
             color=discord.Color.from_str("#2b2d31"),
             description="""
-✅ **Spam Protection** - Auto-mutes spammers
-✅ **Raid Detection** - Detects mass joins
-✅ **AFK System** - Manage AFK status
-✅ **Auto-role** - Assigns roles on join
-✅ **Bad Word Filter** - Filters profanity
-✅ **Rotating Status** - Bot status changes every 7s
-✅ **Ticket System** - Support ticket management
-✅ **Moderation Logs** - Track all mod actions
-✅ **Role Management** - Toggle roles easily
-✅ **Invite Tracking** - Track who invited whom
+▶ `autoresponder add <trigger> <response>` - Add autoresponder
+▶ `autoresponder remove <trigger>` - Remove autoresponder
+▶ `autoresponder show` - Show autoresponders
+
+▶ `autoreact add <trigger> <emoji>` - Add auto reaction
+▶ `autoreact remove <trigger>` - Remove auto reaction
+▶ `autoreact show` - Show auto reactions
+
+▶ `sticky set <message>` - Save sticky message
+▶ `sticky remove` - Remove sticky message
+▶ `sticky show` - Show sticky message
+            """
+        )
+
+    if selected == "roles":
+        return discord.Embed(
+            title="Roles",
+            color=discord.Color.from_str("#2b2d31"),
+            description="""
+▶ `setup role <role>` - Save base role
+▶ `setup role remove <role>` - Remove base role
+▶ `setup role show` - Show saved role
+            """
+        )
+
+    if selected == "media":
+        return discord.Embed(
+            title="Media",
+            color=discord.Color.from_str("#2b2d31"),
+            description=f"""
+Media-only channel
+▶ Only attachments and embeds are allowed
+▶ Channel ID: `{MEDIA_ONLY_CHANNEL_ID}`
             """
         )
 
@@ -4012,7 +4358,9 @@ class ModuleView(discord.ui.View):
             discord.SelectOption(label="Messages", value="messages", emoji="📊"),
             discord.SelectOption(label="Invites", value="invites", emoji="📨"),
             discord.SelectOption(label="Giveaway", value="giveaway", emoji="🎁"),
-            discord.SelectOption(label="Features", value="features", emoji="⚡"),
+            discord.SelectOption(label="Automation", value="automation", emoji="🤖"),
+            discord.SelectOption(label="Roles", value="roles", emoji="🎭"),
+            discord.SelectOption(label="Media", value="media", emoji="📁"),
         ],
     )
     async def help_select_module(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -4038,7 +4386,9 @@ class HelpView(discord.ui.View):
             discord.SelectOption(label="Messages", value="messages", emoji="📊"),
             discord.SelectOption(label="Invites", value="invites", emoji="📨"),
             discord.SelectOption(label="Giveaway", value="giveaway", emoji="🎁"),
-            discord.SelectOption(label="Features", value="features", emoji="⚡"),
+            discord.SelectOption(label="Automation", value="automation", emoji="🤖"),
+            discord.SelectOption(label="Roles", value="roles", emoji="🎭"),
+            discord.SelectOption(label="Media", value="media", emoji="📁"),
         ],
     )
     async def help_select(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -4055,7 +4405,7 @@ async def commands_command(ctx):
     await ctx.send(embed=embed, view=HelpView())
 
 
-@bot.command(name="setup")
+@bot.group(name="setup", invoke_without_command=True)
 @commands.has_permissions(administrator=True)
 async def setup_command(ctx):
     """Setup bot configuration for your server"""
@@ -4081,19 +4431,73 @@ Create 'Temporary Channels' for temp VCs
     )
 
     embed.add_field(
-        name="3️⃣ Set VC Role (Optional)",
-        value="Edit bot.py to set your VC role ID for auto-role on voice join",
+        name="3️⃣ Configure Role Base",
+        value="Use `.setup role <role>` to save the base role configuration",
         inline=False
     )
 
     embed.add_field(
         name="4️⃣ Create Ticket Panel",
-        value="Use `!tickets` to create a ticket panel",
+        value="Use `.sendtickets` to create the ticket panel",
         inline=False
     )
 
     embed.set_footer(text="All set! Enjoy SBot")
     await ctx.send(embed=embed)
+
+
+@setup_command.group(name="role", invoke_without_command=True)
+@commands.has_permissions(administrator=True)
+async def setup_role_command(ctx, role: discord.Role = None):
+    if role is None:
+        await ctx.send(embed=build_automation_embed(
+            ctx,
+            "Setup Role",
+            "Usage: `.setup role <role>`",
+            success=False,
+        ))
+        return
+
+    await set_custom_role(ctx.guild.id, role.id)
+    await ctx.send(embed=build_automation_embed(
+        ctx,
+        "Setup Role",
+        f"Saved role configuration for {role.mention}.",
+    ))
+
+
+@setup_role_command.command(name="remove")
+@commands.has_permissions(administrator=True)
+async def setup_role_remove_command(ctx, role: discord.Role):
+    current_role_id = await get_custom_role_id(ctx.guild.id)
+    if current_role_id != role.id:
+        await ctx.send(embed=build_automation_embed(
+            ctx,
+            "Setup Role",
+            "That role is not the saved role configuration.",
+            success=False,
+        ))
+        return
+
+    await remove_custom_role(ctx.guild.id, role.id)
+    await ctx.send(embed=build_automation_embed(
+        ctx,
+        "Setup Role",
+        f"Removed role configuration for {role.mention}.",
+    ))
+
+
+@setup_role_command.command(name="show")
+@commands.has_permissions(administrator=True)
+async def setup_role_show_command(ctx):
+    role_id = await get_custom_role_id(ctx.guild.id)
+    if not role_id:
+        await ctx.send(embed=build_automation_embed(ctx, "Setup Role", "No role configuration saved yet."))
+        return
+
+    role = ctx.guild.get_role(role_id)
+    role_text = role.mention if role else f"Deleted Role ({role_id})"
+    await ctx.send(embed=build_automation_embed(ctx, "Setup Role", f"Saved role: {role_text}"))
 
 
 @bot.command(name="stats")
