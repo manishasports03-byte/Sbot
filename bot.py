@@ -596,6 +596,27 @@ def parse_short_duration(duration_text):
     except (ValueError, IndexError):
         return None
 
+
+class MemberOrID(commands.Converter):
+    async def convert(self, ctx, argument):
+        try:
+            return await commands.MemberConverter().convert(ctx, argument)
+        except commands.BadArgument:
+            pass
+
+        if ctx.guild and argument.isdigit():
+            member_id = int(argument)
+            member = ctx.guild.get_member(member_id)
+            if member is not None:
+                return member
+            try:
+                return await ctx.guild.fetch_member(member_id)
+            except (discord.NotFound, discord.HTTPException, discord.Forbidden):
+                pass
+
+        raise commands.MemberNotFound(argument)
+
+
 def log_moderation_action(guild_id, action, moderator, target, reason=""):
     """Log moderation actions"""
     entry = {
@@ -2236,7 +2257,7 @@ async def serverinfo_command(ctx):
 
 
 @bot.command(name="userinfo")
-async def userinfo_command(ctx, member: discord.Member = None):
+async def userinfo_command(ctx, member: MemberOrID = None):
     """Show user info"""
     if not ctx.guild:
         await ctx.send("This command can only be used in a server.")
@@ -2307,7 +2328,7 @@ async def vcinfo_command(ctx, channel: discord.VoiceChannel = None):
 
 
 @bot.command(name="avatar")
-async def avatar_command(ctx, member: discord.Member = None):
+async def avatar_command(ctx, member: MemberOrID = None):
     """Show user's avatar"""
     target = member or ctx.author
     embed = discord.Embed(
@@ -2319,7 +2340,7 @@ async def avatar_command(ctx, member: discord.Member = None):
 
 
 @bot.command(name="banner")
-async def banner_command(ctx, member: discord.Member = None):
+async def banner_command(ctx, member: MemberOrID = None):
     """Show user's banner"""
     target = member or ctx.author
     try:
@@ -2415,7 +2436,7 @@ async def permissions_command(ctx):
 
 
 @bot.command(name="accountage")
-async def accountage_command(ctx, member: discord.Member = None):
+async def accountage_command(ctx, member: MemberOrID = None):
     """Show account creation age"""
     target = member or ctx.author
     embed = discord.Embed(
@@ -2649,7 +2670,7 @@ async def gend_error(ctx, error):
 
 @bot.command(name="warn")
 @commands.has_permissions(moderate_members=True)
-async def warn_command(ctx, member: discord.Member, *, reason="No reason provided"):
+async def warn_command(ctx, member: MemberOrID, *, reason="No reason provided"):
     """Warn a member"""
     if member == ctx.author:
         await ctx.send("You cannot warn yourself.")
@@ -2679,7 +2700,7 @@ async def warn_command(ctx, member: discord.Member, *, reason="No reason provide
 
 @bot.command(name="mute")
 @commands.has_permissions(moderate_members=True)
-async def mute_command(ctx, member: discord.Member, duration: str = "10m", *, reason="No reason provided"):
+async def mute_command(ctx, member: MemberOrID, duration: str = "10m", *, reason="No reason provided"):
     """Mute a member (duration: 1m, 1h, 1d, etc.)"""
     await mute_member(ctx, member, duration, reason)
 
@@ -2718,7 +2739,7 @@ async def mute_member(ctx, member: discord.Member, duration: str = "10m", reason
 
 @bot.command(name="unmute")
 @commands.has_permissions(moderate_members=True)
-async def unmute_command(ctx, member: discord.Member):
+async def unmute_command(ctx, member: MemberOrID):
     """Unmute a member"""
     try:
         await member.timeout(None)
@@ -2736,7 +2757,7 @@ async def unmute_command(ctx, member: discord.Member):
 
 @bot.command(name="kick")
 @commands.has_permissions(kick_members=True)
-async def kick_command(ctx, member: discord.Member, *, reason="No reason provided"):
+async def kick_command(ctx, member: MemberOrID, *, reason="No reason provided"):
     """Kick a member from the server"""
     if member == ctx.author:
         await ctx.send("You cannot kick yourself.")
@@ -2763,7 +2784,7 @@ async def kick_command(ctx, member: discord.Member, *, reason="No reason provide
 
 @bot.command(name="ban")
 @commands.has_permissions(ban_members=True)
-async def ban_command(ctx, member: discord.Member, *, reason="No reason provided"):
+async def ban_command(ctx, member: MemberOrID, *, reason="No reason provided"):
     """Ban a member from the server"""
     if member == ctx.author:
         await ctx.send("You cannot ban yourself.")
@@ -2857,7 +2878,7 @@ async def sendtickets_command(ctx):
 
 @bot.command(name="modlogs")
 @commands.has_permissions(administrator=True)
-async def modlogs_command(ctx, member: discord.Member = None):
+async def modlogs_command(ctx, member: MemberOrID = None):
     """View moderation logs"""
     logs = moderation_logs.get(ctx.guild.id, [])
     
@@ -2894,7 +2915,7 @@ async def modlogs_command(ctx, member: discord.Member = None):
 # ===== INVITE TRACKING COMMANDS =====
 
 @bot.command(name="invites", aliases=["inv", "i"])
-async def invites_command(ctx, member: discord.Member = None):
+async def invites_command(ctx, member: MemberOrID = None):
     """Show number of invites of a user"""
     target = member or ctx.author
 
@@ -2902,7 +2923,7 @@ async def invites_command(ctx, member: discord.Member = None):
 
 
 @bot.command(name="inviter")
-async def inviter_command(ctx, member: discord.Member = None):
+async def inviter_command(ctx, member: MemberOrID = None):
     """Show who invited the user"""
     target = member or ctx.author
     
@@ -2928,7 +2949,7 @@ async def inviter_command(ctx, member: discord.Member = None):
 
 
 @bot.command(name="invited")
-async def invited_command(ctx, member: discord.Member = None):
+async def invited_command(ctx, member: MemberOrID = None):
     """List users invited by someone"""
     target = member or ctx.author
 
@@ -2952,7 +2973,7 @@ async def invited_command(ctx, member: discord.Member = None):
 
 
 @bot.command(name="inviteinfo")
-async def inviteinfo_command(ctx, member: discord.Member = None):
+async def inviteinfo_command(ctx, member: MemberOrID = None):
     """Show active invite links created by a user"""
     target = member or ctx.author
     try:
@@ -2984,7 +3005,7 @@ async def inviteinfo_command(ctx, member: discord.Member = None):
 
 @bot.command(name="addinvites")
 @commands.has_permissions(administrator=True)
-async def addinvites_command(ctx, member: discord.Member, amount: int):
+async def addinvites_command(ctx, member: MemberOrID, amount: int):
     """Add invites to a user"""
     if amount <= 0:
         await ctx.send("Please specify a positive amount.")
@@ -3003,7 +3024,7 @@ async def addinvites_command(ctx, member: discord.Member, amount: int):
 
 @bot.command(name="removeinvites")
 @commands.has_permissions(administrator=True)
-async def removeinvites_command(ctx, member: discord.Member, amount: int):
+async def removeinvites_command(ctx, member: MemberOrID, amount: int):
     """Remove invites from a user"""
     if amount <= 0:
         await ctx.send("Please specify a positive amount.")
@@ -3036,7 +3057,7 @@ async def resetmyinvites_command(ctx):
 
 
 @bot.command(name="messages", aliases=["m"])
-async def messages_command(ctx, member: discord.Member = None):
+async def messages_command(ctx, member: MemberOrID = None):
     """Show total message count of a user"""
     target = member or ctx.author
     stats = await get_messages(ctx.guild.id, target.id)
@@ -3064,7 +3085,7 @@ async def messages_error(ctx, error):
 
 @bot.command(name="addmessages")
 @commands.has_permissions(administrator=True)
-async def addmessages_command(ctx, member: discord.Member, amount: int):
+async def addmessages_command(ctx, member: MemberOrID, amount: int):
     """Add messages to a user"""
     if amount <= 0:
         await ctx.send(embed=build_messages_embed(
@@ -3086,7 +3107,7 @@ async def addmessages_command(ctx, member: discord.Member, amount: int):
 
 @bot.command(name="removemessages")
 @commands.has_permissions(administrator=True)
-async def removemessages_command(ctx, member: discord.Member, amount: int):
+async def removemessages_command(ctx, member: MemberOrID, amount: int):
     """Remove messages from a user"""
     if amount <= 0:
         await ctx.send(embed=build_messages_embed(
