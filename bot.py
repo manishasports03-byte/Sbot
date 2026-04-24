@@ -48,7 +48,7 @@ MESSAGE_DAILY_RESET_KEY = "message_daily_reset_date"
 NO_PREFIX_DISABLED_CHANNEL_ID = 1379052516863381638
 NO_PREFIX_COMMANDS = {
     "about", "info", "botinfo", "ping", "invite",
-    "serverinfo", "userinfo", "roleinfo", "vcinfo", "avatar", "banner", "guildbanner",
+    "serverinfo", "userinfo", "roleinfo", "vcinfo", "avatar", "av", "banner", "guildbanner",
     "membercount", "shards", "permissions", "accountage", "uptime", "stats", "setup",
     "tickets", "sendtickets", "modlogs",
     "invites", "inv", "i", "inviter", "invited", "inviteinfo",
@@ -2728,7 +2728,7 @@ async def vcinfo_command(ctx, channel: discord.VoiceChannel = None):
     await ctx.send(embed=embed)
 
 
-@bot.command(name="avatar")
+@bot.command(name="avatar", aliases=["av"])
 async def avatar_command(ctx, member: MemberOrID = None):
     """Show user's avatar"""
     target = member or ctx.author
