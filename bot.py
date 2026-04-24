@@ -3103,8 +3103,6 @@ async def sticky_show_command(ctx):
 @autoreact_add_command.error
 @autoreact_remove_command.error
 @sticky_set_command.error
-@setup_role_command.error
-@setup_role_remove_command.error
 async def automation_command_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(embed=build_automation_embed(
@@ -4498,6 +4496,12 @@ async def setup_role_show_command(ctx):
     role = ctx.guild.get_role(role_id)
     role_text = role.mention if role else f"Deleted Role ({role_id})"
     await ctx.send(embed=build_automation_embed(ctx, "Setup Role", f"Saved role: {role_text}"))
+
+
+@setup_role_command.error
+@setup_role_remove_command.error
+async def setup_role_error(ctx, error):
+    await automation_command_error(ctx, error)
 
 
 @bot.command(name="stats")
