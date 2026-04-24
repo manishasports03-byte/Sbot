@@ -2,7 +2,9 @@ import os
 import random
 import re
 import copy
+import io
 import asyncpg
+import aiohttp
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 import asyncio
@@ -57,6 +59,7 @@ NO_PREFIX_COMMANDS = {
     "lb", "leaderboard",
     "warn", "mute", "unmute", "kick", "ban", "purge", "slowmode",
     "gstart", "gend", "greroll",
+    "steal",
 }
 
 # ===== ACTIVITY ROTATION =====
@@ -713,6 +716,217 @@ def build_automation_embed(ctx, title, description, success=True):
     )
     embed.set_footer(text=f"Requested by {ctx.author.display_name}")
     return embed
+
+
+def build_asset_embed(title, description, success=True):
+    return discord.Embed(
+        title=title,
+        description=description,
+        color=discord.Color.from_str("#2b2d31") if success else discord.Color.red(),
+    )
+
+
+def can_manage_guild_assets(member):
+    permissions = getattr(member, "guild_permissions", None)
+    if permissions is None:
+        return False
+    return bool(
+        permissions.administrator
+        or getattr(permissions, "manage_emojis_and_stickers", False)
+        or getattr(permissions, "manage_expressions", False)
+    )
+
+
+def sanitize_asset_name(name, fallback="stolen_asset"):
+    cleaned = re.sub(r"[^A-Za-z0-9_]", "", name or "")
+    if not cleaned:
+        cleaned = fallback
+    return cleaned[:32]
+
+
+def extract_custom_emoji_asset(message):
+    match = re.search(r"<(a?):([A-Za-z0-9_]+):(\d+)>", message.content)
+    if not match:
+        return None
+
+    animated = bool(match.group(1))
+    name = sanitize_asset_name(match.group(2), "stolen_emoji")
+    emoji_id = int(match.group(3))
+    partial = discord.PartialEmoji(name=name, animated=animated, id=emoji_id)
+    extension = "gif" if animated else "png"
+    return {
+        "kind": "emoji",
+        "name": name,
+        "url": str(partial.url),
+        "filename": f"{name}.{extension}",
+    }
+
+
+def extract_sticker_asset(message):
+    if not message.stickers:
+        return None
+
+    sticker = message.stickers[0]
+    sticker_format = getattr(sticker.format, "name", "").lower()
+    if sticker_format == "lottie":
+        extension = "json"
+    elif sticker_format == "gif":
+        extension = "gif"
+    else:
+        extension = "png"
+
+    return {
+        "kind": "sticker",
+        "name": sanitize_asset_name(sticker.name, "stolen_sticker"),
+        "url": str(sticker.url),
+        "filename": f"{sanitize_asset_name(sticker.name, 'stolen_sticker')}.{extension}",
+    }
+
+
+async def download_asset_bytes(url):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            if response.status != 200:
+                raise ValueError("Failed to download asset.")
+            return await response.read()
+
+
+class StealAssetView(discord.ui.View):
+    def __init__(self, author_id, asset_data):
+        super().__init__(timeout=180)
+        self.author_id = author_id
+        self.asset_data = asset_data
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                embed=build_asset_embed("Steal Asset", "Only the command author can use these buttons.", success=False),
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _add_as_emoji(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                embed=build_asset_embed("Steal Asset", "This action only works in a server.", success=False),
+                ephemeral=True,
+            )
+            return
+
+        if len(guild.emojis) >= guild.emoji_limit:
+            await interaction.response.send_message(
+                embed=build_asset_embed("Steal Asset", "❌ Emoji slots are full.", success=False),
+                ephemeral=True,
+            )
+            return
+
+        try:
+            asset_bytes = await download_asset_bytes(self.asset_data["url"])
+            await guild.create_custom_emoji(
+                name=sanitize_asset_name(self.asset_data["name"], "stolen_emoji"),
+                image=asset_bytes,
+                reason=f"Asset stolen by {interaction.user}",
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                embed=build_asset_embed("Steal Asset", "Missing permission to add emojis.", success=False),
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as e:
+            message = "Could not add that asset as an emoji."
+            if "maximum" in str(e).lower() or "size" in str(e).lower():
+                message = "File is too large for an emoji."
+            await interaction.response.send_message(
+                embed=build_asset_embed("Steal Asset", message, success=False),
+                ephemeral=True,
+            )
+            return
+        except Exception:
+            await interaction.response.send_message(
+                embed=build_asset_embed("Steal Asset", "Could not add that asset as an emoji.", success=False),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            embed=build_asset_embed("Steal Asset", "✅ Emoji added successfully."),
+            ephemeral=True,
+        )
+
+    async def _add_as_sticker(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                embed=build_asset_embed("Steal Asset", "This action only works in a server.", success=False),
+                ephemeral=True,
+            )
+            return
+
+        if len(guild.stickers) >= guild.sticker_limit:
+            await interaction.response.send_message(
+                embed=build_asset_embed("Steal Asset", "❌ Sticker slots are full.", success=False),
+                ephemeral=True,
+            )
+            return
+
+        try:
+            asset_bytes = await download_asset_bytes(self.asset_data["url"])
+            asset_file = discord.File(io.BytesIO(asset_bytes), filename=self.asset_data["filename"])
+            await guild.create_sticker(
+                name=sanitize_asset_name(self.asset_data["name"], "stolen_sticker"),
+                description="Stolen asset",
+                emoji="🙂",
+                file=asset_file,
+                reason=f"Asset stolen by {interaction.user}",
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                embed=build_asset_embed("Steal Asset", "Missing permission to add stickers.", success=False),
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as e:
+            message = "Could not add that asset as a sticker."
+            error_text = str(e).lower()
+            if "size" in error_text or "maximum" in error_text:
+                message = "File is too large for a sticker."
+            await interaction.response.send_message(
+                embed=build_asset_embed("Steal Asset", message, success=False),
+                ephemeral=True,
+            )
+            return
+        except Exception:
+            await interaction.response.send_message(
+                embed=build_asset_embed("Steal Asset", "Could not add that asset as a sticker.", success=False),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            embed=build_asset_embed("Steal Asset", "✅ Sticker added successfully."),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="Add as Emoji", style=discord.ButtonStyle.secondary)
+    async def add_as_emoji(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._add_as_emoji(interaction)
+
+    @discord.ui.button(label="Add as Sticker", style=discord.ButtonStyle.secondary)
+    async def add_as_sticker(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._add_as_sticker(interaction)
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            await interaction.message.delete()
+        except discord.HTTPException:
+            await interaction.response.defer()
+        else:
+            if not interaction.response.is_done():
+                await interaction.response.defer()
 
 
 async def set_guild_prefix(guild_id, prefix):
@@ -2292,6 +2506,38 @@ async def support_command(ctx):
         color=discord.Color.blurple()
     )
     await ctx.send(embed=embed)
+
+
+@bot.command(name="steal")
+async def steal_command(ctx):
+    if not can_manage_guild_assets(ctx.author):
+        await ctx.send(embed=build_asset_embed("Steal Asset", "Missing permissions for this command.", success=False))
+        return
+
+    if not ctx.guild:
+        await ctx.send(embed=build_asset_embed("Steal Asset", "This command only works in a server.", success=False))
+        return
+
+    if not ctx.message.reference or not isinstance(ctx.message.reference.resolved, discord.Message):
+        await ctx.send(embed=build_asset_embed("Steal Asset", "Reply to a message containing an emoji or sticker.", success=False))
+        return
+
+    replied_message = ctx.message.reference.resolved
+    asset_data = extract_custom_emoji_asset(replied_message) or extract_sticker_asset(replied_message)
+    if asset_data is None:
+        await ctx.send(embed=build_asset_embed("Steal Asset", "Reply to a message containing an emoji or sticker.", success=False))
+        return
+
+    if not (
+        ctx.guild.me.guild_permissions.administrator
+        or getattr(ctx.guild.me.guild_permissions, "manage_emojis_and_stickers", False)
+        or getattr(ctx.guild.me.guild_permissions, "manage_expressions", False)
+    ):
+        await ctx.send(embed=build_asset_embed("Steal Asset", "I need Manage Emojis & Stickers permission.", success=False))
+        return
+
+    embed = build_asset_embed("Steal Asset", "Choose what to do with this asset")
+    await ctx.send(embed=embed, view=StealAssetView(ctx.author.id, asset_data))
 
 
 @bot.command(name="invite")
