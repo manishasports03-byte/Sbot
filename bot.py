@@ -695,13 +695,6 @@ def build_messages_usage_embed(ctx, command_name, usage):
     )
 
 
-def get_named_guild_emoji(guild, emoji_name, fallback):
-    if guild is None:
-        return fallback
-    emoji = discord.utils.get(guild.emojis, name=emoji_name)
-    return str(emoji) if emoji else fallback
-
-
 def build_moderation_embed(ctx, title, description, success=True):
     embed = discord.Embed(
         title=title,
@@ -2286,33 +2279,6 @@ async def ping_command(ctx):
         description=f"Latency: **{round(bot.latency * 1000)}ms**",
         color=discord.Color.green()
     )
-    await ctx.send(embed=embed)
-
-
-@bot.command(name="testg")
-async def testg_command(ctx):
-    heart_emoji = get_named_guild_emoji(ctx.guild, "HeartsBubblePink", "💞")
-    panda_emoji = get_named_guild_emoji(ctx.guild, "hapisim", "🐼")
-    pig_emoji = get_named_guild_emoji(ctx.guild, "happy_lily", "🐷")
-
-    embed = discord.Embed(
-        color=discord.Color.from_rgb(30, 30, 30),
-        description=(
-            f"{heart_emoji} **Wlcm To Magic Shop {heart_emoji}**\n\n"
-            f"{panda_emoji} Before you step fully into the **magic**,\n"
-            f"be sure to follow <#1379434209164132434>\n\n"
-            f"{pig_emoji} Choose your vibe with the <#1379486245486460959> 🪄"
-        ),
-    )
-    embed.set_author(
-        name=ctx.author.display_name,
-        icon_url=ctx.author.display_avatar.url,
-    )
-    embed.set_image(
-        url="https://media.discordapp.net/attachments/1379072095899615232/1494284320599179356/ezgif-549dd942b0d67c6a.gif"
-    )
-    embed.set_footer(text="Have a spellbinding stay !!")
-    embed.timestamp = datetime.utcnow()
     await ctx.send(embed=embed)
 
 
