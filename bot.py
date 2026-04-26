@@ -87,6 +87,26 @@ ticket_button_cooldowns = {}
 MEDIA_ONLY_CHANNEL_ID = 1379065330957160560
 AUTORESPONDER_COOLDOWN_SECONDS = 2
 autoresponder_cooldowns = {}
+LINK_FILTER_GUILD_ID = 1218837762753564722
+URL_PATTERN = re.compile(r"(https?://[^\s]+|www\.[^\s]+)", re.IGNORECASE)
+DISCORD_INVITE_PATTERN = re.compile(
+    r"(discord\.gg/[A-Za-z0-9-]+|discord(?:app)?\.com/invite/[A-Za-z0-9-]+)",
+    re.IGNORECASE,
+)
+NSFW_DOMAIN_KEYWORDS = (
+    "porn",
+    "xvideos",
+    "xnxx",
+    "xhamster",
+    "redtube",
+    "youporn",
+    "pornhub",
+    "sex",
+    "hentai",
+    "rule34",
+    "onlyfans",
+    "nsfw",
+)
 
 # ===== GIVEAWAY CONFIG =====
 giveaways = {}  # {message_id: {"message_id": int, "channel_id": int, "guild_id": int, "end_time": datetime, "winners": int, "prize": str, "ended": bool, "task": asyncio.Task | None}}
@@ -100,6 +120,19 @@ SPAM_MUTE_DURATION = 300  # 5 minutes
 # ===== MODERATION CONFIG =====
 warnings = defaultdict(lambda: defaultdict(int))  # {guild_id: {user_id: count}}
 moderation_logs = defaultdict(list)  # {guild_id: [log_entries]}
+
+
+def message_has_blocked_link(message_content):
+    lowered_content = message_content.lower()
+    if DISCORD_INVITE_PATTERN.search(lowered_content):
+        return True
+
+    for url in URL_PATTERN.findall(lowered_content):
+        normalized_url = url.lower().strip("()[]<>.,!?\"'")
+        if any(keyword in normalized_url for keyword in NSFW_DOMAIN_KEYWORDS):
+            return True
+
+    return False
 
 async def load_guild_prefixes():
     """Load guild prefixes from PostgreSQL into cache."""
@@ -3912,6 +3945,19 @@ async def on_message(message):
         except discord.HTTPException:
             pass
         await message.channel.send("This channel is for media only.", delete_after=5)
+        return
+
+    if (
+        message.guild
+        and message.guild.id == LINK_FILTER_GUILD_ID
+        and not message.author.bot
+        and message.content
+        and message_has_blocked_link(message.content)
+    ):
+        try:
+            await message.delete()
+        except discord.HTTPException:
+            pass
         return
 
     if (
