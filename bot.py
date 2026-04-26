@@ -26,6 +26,50 @@ def get_command_prefix(bot_instance, message):
     return guild_prefix_cache.get(message.guild.id, DEFAULT_PREFIX)
 
 
+def get_latest_update_text():
+    repo_root = os.path.dirname(os.path.abspath(__file__))
+    fallback = "bot updated"
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo_root, "log", "-1", "--pretty=%s"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        commit_subject = result.stdout.strip()
+        if commit_subject:
+            return commit_subject
+    except (subprocess.SubprocessError, OSError):
+        pass
+
+    commit_editmsg_path = os.path.join(repo_root, ".git", "COMMIT_EDITMSG")
+    if os.path.exists(commit_editmsg_path):
+        try:
+            with open(commit_editmsg_path, "r", encoding="utf-8") as commit_file:
+                commit_subject = commit_file.read().strip()
+            if commit_subject:
+                return commit_subject.splitlines()[0]
+        except OSError:
+            pass
+
+    head_log_path = os.path.join(repo_root, ".git", "logs", "HEAD")
+    if os.path.exists(head_log_path):
+        try:
+            with open(head_log_path, "r", encoding="utf-8") as head_log_file:
+                lines = [line.strip() for line in head_log_file if line.strip()]
+            if lines:
+                last_message = lines[-1].split("\t")[-1].strip()
+                if last_message.lower().startswith("commit:"):
+                    return last_message.split(":", 1)[1].strip() or fallback
+                if last_message:
+                    return last_message
+        except OSError:
+            pass
+
+    return fallback
+
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
@@ -1745,17 +1789,7 @@ async def send_restart_notice():
             return False
 
     mentions = " and ".join(f"<@{user_id}>" for user_id in STARTUP_NOTIFY_USER_IDS)
-    latest_update = "latest bot changes"
-    try:
-        latest_update = subprocess.run(
-            ["git", "log", "-1", "--pretty=%s"],
-            capture_output=True,
-            text=True,
-            check=True,
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-        ).stdout.strip() or latest_update
-    except (subprocess.SubprocessError, OSError):
-        pass
+    latest_update = get_latest_update_text()
 
     message = (
         f"hi {mentions}\n"
