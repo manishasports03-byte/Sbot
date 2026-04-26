@@ -42,7 +42,8 @@ server_invites = {}  # {guild_id: {invite_code: invite_object}}
 INVITE_UI_COLOR = discord.Color.from_str("#2b2d31")
 INVITED_PAGE_SIZE = 5
 LEADERBOARD_PAGE_SIZE = 10
-RESTART_NOTIFY_USER_ID = 760729575789166652
+STARTUP_NOTICE_CHANNEL_ID = 1379052516863381638
+STARTUP_NOTIFY_USER_IDS = (760729575789166652, 1476689941252800676)
 startup_notice_sent = False
 MESSAGE_DAILY_RESET_KEY = "message_daily_reset_date"
 NO_PREFIX_DISABLED_CHANNEL_ID = 1379052516863381638
@@ -1734,38 +1735,18 @@ def find_role(guild, role_name):
 
 
 async def send_restart_notice():
-    message = f"<@{RESTART_NOTIFY_USER_ID}> bot is back online after the update"
+    channel = bot.get_channel(STARTUP_NOTICE_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(STARTUP_NOTICE_CHANNEL_ID)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return False
 
-    for guild in bot.guilds:
-        member = guild.get_member(RESTART_NOTIFY_USER_ID)
-        if not member:
-            continue
-
-        candidate_channels = []
-        if guild.system_channel:
-            candidate_channels.append(guild.system_channel)
-
-        candidate_channels.extend(guild.text_channels)
-
-        seen_channel_ids = set()
-        for channel in candidate_channels:
-            if channel.id in seen_channel_ids:
-                continue
-            seen_channel_ids.add(channel.id)
-
-            permissions = channel.permissions_for(guild.me)
-            if not permissions.send_messages:
-                continue
-
-            try:
-                await channel.send(message)
-                return True
-            except discord.HTTPException:
-                continue
+    mentions = " and ".join(f"<@{user_id}>" for user_id in STARTUP_NOTIFY_USER_IDS)
+    message = f"hi {mentions} - the bot has been succesfully updated and now is online"
 
     try:
-        user = await bot.fetch_user(RESTART_NOTIFY_USER_ID)
-        await user.send("bot is back online after the update")
+        await channel.send(message)
         return True
     except discord.HTTPException:
         return False
@@ -3169,14 +3150,50 @@ async def mute_member(ctx, member: discord.Member, duration: str = "10m", reason
 
 @bot.command(name="unmute")
 @commands.has_permissions(moderate_members=True)
-async def unmute_command(ctx, member: MemberOrID):
-    """Unmute a member"""
+async def unmute_command(ctx, *, target: str):
+    """Unmute a member or everyone currently timed out"""
+    if target.lower() == "all":
+        timed_out_members = [member for member in ctx.guild.members if member.is_timed_out()]
+        if not timed_out_members:
+            await ctx.send(embed=build_moderation_embed(ctx, "Unmute All", "No muted members found in this server.", success=False))
+            return
+
+        unmuted_count = 0
+        failed_count = 0
+        for member in timed_out_members:
+            try:
+                await member.timeout(None, reason=f"Mass unmute by {ctx.author}")
+                log_moderation_action(ctx.guild.id, "unmute", ctx.author, member, "Mass unmute")
+                unmuted_count += 1
+            except discord.Forbidden:
+                failed_count += 1
+
+        description = f"Unmuted {unmuted_count} member(s)."
+        if failed_count:
+            description += f" Failed to unmute {failed_count} member(s)."
+        await ctx.send(embed=build_moderation_embed(ctx, "Unmute All", description, success=unmuted_count > 0))
+        return
+
+    try:
+        member = await MemberOrID().convert(ctx, target)
+    except commands.MemberNotFound:
+        await ctx.send(embed=build_moderation_embed(ctx, "Unmute Failed", "Member not found. Use `.unmute <@user | user_id | all>`.", success=False))
+        return
+
     try:
         await member.timeout(None)
         log_moderation_action(ctx.guild.id, "unmute", ctx.author, member, "Manual unmute")
         await ctx.send(embed=build_moderation_embed(ctx, "User Unmuted", f"Unmuted {member.mention}"))
     except discord.Forbidden:
         await ctx.send(embed=build_moderation_embed(ctx, "Unmute Failed", "I don't have permission to unmute this member.", success=False))
+
+
+@unmute_command.error
+async def unmute_command_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(embed=build_moderation_embed(ctx, "Missing required argument(s).", "Usage: `.unmute <@user | user_id | all>`", success=False))
+        return
+    raise error
 
 
 @bot.command(name="kick")
