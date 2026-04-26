@@ -3,6 +3,7 @@ import random
 import re
 import copy
 import io
+import subprocess
 import asyncpg
 import aiohttp
 from datetime import datetime, timezone, timedelta
@@ -86,6 +87,7 @@ TICKET_PANEL_TITLE = "Create Ticket"
 TICKET_BUTTON_COOLDOWN_SECONDS = 15
 ticket_button_cooldowns = {}
 MEDIA_ONLY_CHANNEL_ID = 1379065330957160560
+VERIFIED_ROLE_ID = 1442882228802551971
 AUTORESPONDER_COOLDOWN_SECONDS = 2
 autoresponder_cooldowns = {}
 LINK_FILTER_GUILD_ID = 1218837762753564722
@@ -1743,13 +1745,49 @@ async def send_restart_notice():
             return False
 
     mentions = " and ".join(f"<@{user_id}>" for user_id in STARTUP_NOTIFY_USER_IDS)
-    message = f"hi {mentions} - the bot has been succesfully updated and now is online"
+    latest_update = "latest bot changes"
+    try:
+        latest_update = subprocess.run(
+            ["git", "log", "-1", "--pretty=%s"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+        ).stdout.strip() or latest_update
+    except (subprocess.SubprocessError, OSError):
+        pass
+
+    message = (
+        f"hi {mentions}\n"
+        "bot is back online ✅\n"
+        f"new update - {latest_update}"
+    )
 
     try:
         await channel.send(message)
         return True
     except discord.HTTPException:
         return False
+
+
+async def ensure_verified_role_media_access():
+    for guild in bot.guilds:
+        channel = guild.get_channel(MEDIA_ONLY_CHANNEL_ID)
+        role = guild.get_role(VERIFIED_ROLE_ID)
+        if channel is None or role is None:
+            continue
+
+        try:
+            await channel.set_permissions(
+                role,
+                send_messages=True,
+                view_channel=True,
+                read_message_history=True,
+            )
+        except discord.Forbidden:
+            print(f"Missing permissions to update media access in {guild.name}")
+        except discord.HTTPException:
+            print(f"Failed to update media access in {guild.name}")
 
 
 async def handle_role_toggle(message):
@@ -2372,6 +2410,7 @@ async def on_ready():
     bot.add_view(TicketCloseView())
     bot.add_view(TicketStaffControlsView())
     await ensure_ticket_panel()
+    await ensure_verified_role_media_access()
     
     # Cache all server invites
     for guild in bot.guilds:
