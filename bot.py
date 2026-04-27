@@ -21,7 +21,12 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 DEFAULT_PREFIX = "."
 BOT_START_TIME = datetime.now(timezone.utc)
 STARTUP_UPDATE_TEXT = "Fix startup notice update text lookup"
-GEMINI_MODEL_NAME = "gemini-1.5-flash"
+GEMINI_MODEL_CANDIDATES = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash-latest",
+    "gemini-pro",
+]
 GEMINI_REPLY_MAX_LENGTH = 250
 GEMINI_USER_COOLDOWN_SECONDS = 4
 GEMINI_CHANNEL_COOLDOWN_SECONDS = 2
@@ -154,7 +159,10 @@ memory = defaultdict(lambda: deque(maxlen=8))
 user_cooldowns = {}
 channel_cooldowns = {}
 last_chat_inputs = {}
-gemini_model = genai.GenerativeModel(GEMINI_MODEL_NAME) if os.getenv("GEMINI_API_KEY") else None
+active_gemini_model_name = GEMINI_MODEL_CANDIDATES[0] if os.getenv("GEMINI_API_KEY") else None
+gemini_model = genai.GenerativeModel(active_gemini_model_name) if active_gemini_model_name else None
+if gemini_model is not None:
+    print("Using Gemini model:", getattr(gemini_model, "model_name", active_gemini_model_name))
 
 # ===== MODERATION CONFIG =====
 warnings = defaultdict(lambda: defaultdict(int))  # {guild_id: {user_id: count}}
@@ -211,6 +219,8 @@ def should_ignore_chatbot_message(content, user_id):
 
 
 async def generate_gemini_reply(mode, channel_id, user_message):
+    global gemini_model, active_gemini_model_name
+
     if gemini_model is None:
         return None
 
@@ -231,33 +241,50 @@ User: {user_message}
 Stay strictly in character. Never act like an AI assistant.
 Reply:
 """
-    try:
-        response = await asyncio.to_thread(gemini_model.generate_content, prompt)
-        print("Gemini RAW:", response)
-        if not response:
+    candidate_names = [active_gemini_model_name] + [
+        model_name for model_name in GEMINI_MODEL_CANDIDATES
+        if model_name != active_gemini_model_name
+    ]
+
+    for model_name in candidate_names:
+        model_instance = gemini_model if model_name == active_gemini_model_name else genai.GenerativeModel(model_name)
+        try:
+            response = await asyncio.to_thread(model_instance.generate_content, prompt)
+            print("Gemini RAW:", response)
+            if not response:
+                continue
+
+            reply = None
+            if hasattr(response, "text") and response.text:
+                reply = response.text.strip()
+            elif hasattr(response, "candidates"):
+                try:
+                    reply = response.candidates[0].content.parts[0].text.strip()
+                except Exception:
+                    reply = None
+
+            if not reply:
+                print("Gemini returned empty response")
+                continue
+
+            reply = clean_chatbot_reply(reply)
+            if not reply:
+                continue
+
+            if model_name != active_gemini_model_name:
+                gemini_model = model_instance
+                active_gemini_model_name = model_name
+                print("Using Gemini model:", getattr(gemini_model, "model_name", active_gemini_model_name))
+
+            return reply
+        except Exception as e:
+            print("Gemini ERROR FULL:", repr(e))
+            error_text = repr(e).lower()
+            if "not found" in error_text or "404" in error_text:
+                continue
             return None
 
-        reply = None
-        if hasattr(response, "text") and response.text:
-            reply = response.text.strip()
-        elif hasattr(response, "candidates"):
-            try:
-                reply = response.candidates[0].content.parts[0].text.strip()
-            except Exception:
-                reply = None
-
-        if not reply:
-            print("Gemini returned empty response")
-            return None
-
-        reply = clean_chatbot_reply(reply)
-        if not reply:
-            return None
-
-        return reply
-    except Exception as e:
-        print("Gemini ERROR FULL:", repr(e))
-        return None
+    return None
 
 async def load_guild_prefixes():
     """Load guild prefixes from PostgreSQL into cache."""
