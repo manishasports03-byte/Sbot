@@ -3,21 +3,44 @@ import random
 import re
 import copy
 import io
+import time
 import asyncpg
 import aiohttp
 from datetime import datetime, timezone, timedelta
-from collections import defaultdict
+from collections import defaultdict, deque
 import asyncio
 
 import discord
+import google.generativeai as genai
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 load_dotenv()
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 DEFAULT_PREFIX = "."
 BOT_START_TIME = datetime.now(timezone.utc)
 STARTUP_UPDATE_TEXT = "Fix startup notice update text lookup"
+GEMINI_MODEL_NAME = "gemini-1.5-flash"
+GEMINI_REPLY_MAX_LENGTH = 300
+GEMINI_COOLDOWN_SECONDS = 3
+
+SIM_PERSONA = """
+You are sim.
+Speak casually, fun, slightly chaotic.
+Use Hinglish + slang (arey, nahh, shyt).
+Keep replies short-medium.
+Be chill, friendly, playful.
+Don't sound like AI.
+"""
+
+ANSH_PERSONA = """
+You are ansh.
+Blunt, direct, confident.
+Short replies.
+No sugarcoating.
+Slight sarcasm allowed.
+"""
 
 
 def get_command_prefix(bot_instance, message):
@@ -62,6 +85,7 @@ NO_PREFIX_COMMANDS = {
     "messages", "m", "addmessages", "removemessages",
     "blacklistchannel", "unblacklistchannel", "blacklistedchannels", "clearmessages", "resetmymessages",
     "autoresponder", "autoreact", "sticky",
+    "chatbot", "chatmode",
     "lb", "leaderboard",
     "warn", "mute", "unmute", "kick", "ban", "purge", "slowmode",
     "gstart", "gend", "greroll",
@@ -123,6 +147,11 @@ spam_tracker = defaultdict(list)  # {user_id: [timestamps]}
 SPAM_THRESHOLD = 5  # messages in SPAM_WINDOW
 SPAM_WINDOW = 5  # seconds
 SPAM_MUTE_DURATION = 300  # 5 minutes
+chat_modes = {}  # {channel_id: mode}
+mention_mode = {}  # {channel_id: bool}
+memory = defaultdict(lambda: deque(maxlen=8))
+cooldowns = {}
+gemini_model = genai.GenerativeModel(GEMINI_MODEL_NAME) if os.getenv("GEMINI_API_KEY") else None
 
 # ===== MODERATION CONFIG =====
 warnings = defaultdict(lambda: defaultdict(int))  # {guild_id: {user_id: count}}
@@ -140,6 +169,55 @@ def message_has_blocked_link(message_content):
             return True
 
     return False
+
+
+def get_chatbot_persona(mode):
+    if mode == "sim":
+        return SIM_PERSONA
+    if mode == "ansh":
+        return ANSH_PERSONA
+    return None
+
+
+def clean_chatbot_content(content, bot_user_id):
+    cleaned = content.replace(f"<@{bot_user_id}>", "").replace(f"<@!{bot_user_id}>", "").strip()
+    cleaned = re.sub(r"[*_`~|>#]+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def clean_chatbot_reply(reply):
+    cleaned = re.sub(r"[*_`~|]+", "", reply or "")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:GEMINI_REPLY_MAX_LENGTH]
+
+
+async def generate_gemini_reply(mode, channel_id, user_message):
+    if gemini_model is None:
+        raise RuntimeError("GEMINI_API_KEY is not set.")
+
+    persona = get_chatbot_persona(mode)
+    if persona is None:
+        raise ValueError("Invalid chatbot mode.")
+
+    history = "\n".join(
+        [f"User: {entry['user']}\nBot: {entry['bot']}" for entry in memory[channel_id]]
+    )
+    prompt = f"""
+{persona}
+
+Conversation:
+{history}
+
+User: {user_message}
+Reply naturally:
+"""
+    response = await asyncio.to_thread(gemini_model.generate_content, prompt)
+    reply = clean_chatbot_reply(getattr(response, "text", "") or "")
+    if not reply:
+        raise RuntimeError("Gemini returned an empty response.")
+
+    return reply
 
 async def load_guild_prefixes():
     """Load guild prefixes from PostgreSQL into cache."""
@@ -3965,7 +4043,7 @@ async def leaderboard_command(ctx, category: str = None):
 
 @bot.event
 async def on_message(message):
-    if message.author == bot.user:
+    if message.author.bot:
         return
 
     msg = message.content.lower()
@@ -3981,6 +4059,9 @@ async def on_message(message):
     no_prefix_blocked_channel = (
         message.guild is not None
         and message.channel.id == NO_PREFIX_DISABLED_CHANNEL_ID
+    )
+    is_command_message = message.content.startswith(current_prefix) or (
+        is_admin_user and first_word in NO_PREFIX_COMMANDS and not no_prefix_blocked_channel
     )
 
     if (
@@ -4134,9 +4215,6 @@ async def on_message(message):
             continue
 
     if message.guild and not message.author.bot:
-        is_command_message = message.content.startswith(current_prefix) or (
-            is_admin_user and first_word in NO_PREFIX_COMMANDS and not no_prefix_blocked_channel
-        )
         if not is_command_message:
             for trigger, emoji in await get_auto_reactions(message.guild.id):
                 if trigger in msg:
@@ -4154,6 +4232,33 @@ async def on_message(message):
                         )
                         await message.channel.send(response)
                         break
+
+    mode = chat_modes.get(message.channel.id)
+    if mode and not is_command_message:
+        require_mention = mention_mode.get(message.channel.id, False)
+        if require_mention and bot.user not in message.mentions:
+            await bot.process_commands(message)
+            return
+
+        content = clean_chatbot_content(message.content, bot.user.id)
+        if not content:
+            await bot.process_commands(message)
+            return
+
+        last_used = cooldowns.get(message.author.id, 0)
+        if time.time() - last_used >= GEMINI_COOLDOWN_SECONDS:
+            cooldowns[message.author.id] = time.time()
+            try:
+                async with message.channel.typing():
+                    reply = await generate_gemini_reply(mode, message.channel.id, content)
+                memory[message.channel.id].append({
+                    "user": content,
+                    "bot": reply,
+                })
+                await message.reply(reply, mention_author=False)
+            except Exception as e:
+                print("Gemini Error:", e)
+                await message.reply("try again in a sec", mention_author=False)
 
     await bot.process_commands(message)
 
@@ -4654,6 +4759,12 @@ Leaderboard
             title="Automation",
             color=discord.Color.from_str("#2b2d31"),
             description="""
+▶ `chatbot sim` - Enable Gemini chatbot in sim mode
+▶ `chatbot ansh` - Enable Gemini chatbot in ansh mode
+▶ `chatbot off` - Disable chatbot in this channel
+▶ `chatmode mention` - Reply only when the bot is mentioned
+▶ `chatmode free` - Reply to all non-command messages
+
 ▶ `autoresponder add <trigger> <response>` - Add autoresponder
 ▶ `autoresponder remove <trigger>` - Remove autoresponder
 ▶ `autoresponder show` - Show autoresponders
@@ -4746,6 +4857,52 @@ class HelpView(discord.ui.View):
             embed=get_help_module_embed(select.values[0]),
             view=ModuleView(),
         )
+
+
+@bot.command(name="chatbot")
+async def chatbot_command(ctx, mode: str = None):
+    if not mode:
+        await ctx.send("Use: `.chatbot sim / ansh / off`")
+        return
+
+    mode = mode.lower()
+
+    if mode == "off":
+        chat_modes.pop(ctx.channel.id, None)
+        await ctx.send("❌ Chatbot disabled.")
+        return
+
+    if mode not in {"sim", "ansh"}:
+        await ctx.send("Invalid mode.")
+        return
+
+    if gemini_model is None:
+        await ctx.send("Set `GEMINI_API_KEY` in `.env` before enabling chatbot mode.")
+        return
+
+    chat_modes[ctx.channel.id] = mode
+    await ctx.send(f"✅ Chatbot set to **{mode}** mode.")
+
+
+@bot.command(name="chatmode")
+async def chatmode_command(ctx, mode: str = None):
+    if not mode:
+        await ctx.send("Use: `.chatmode mention / free`")
+        return
+
+    mode = mode.lower()
+
+    if mode == "mention":
+        mention_mode[ctx.channel.id] = True
+        await ctx.send("🎯 Chatbot will reply only when mentioned.")
+        return
+
+    if mode == "free":
+        mention_mode[ctx.channel.id] = False
+        await ctx.send("💬 Chatbot will reply to all messages.")
+        return
+
+    await ctx.send("Invalid mode.")
 
 
 @bot.command(name="help", aliases=["commands", "cmd"])
