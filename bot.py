@@ -31,6 +31,38 @@ GEMINI_REPLY_MAX_LENGTH = 120
 GEMINI_USER_COOLDOWN_SECONDS = 4
 GEMINI_CHANNEL_COOLDOWN_SECONDS = 2
 GEMINI_MODEL_RETRY_BACKOFF_SECONDS = 1.5
+SIM_TONE_VARIANTS = [
+    "dry",
+    "playful",
+    "slightly annoyed",
+    "curious",
+]
+SIM_FALLBACK_REPLIES = {
+    "dry": [
+        "hmm theek",
+        "haan samajh gayi",
+        "achha phir",
+        "theek hai, zyada dramatic mat ho",
+    ],
+    "playful": [
+        "hmm cute",
+        "achha ji",
+        "theek hai, maan liya",
+        "okay, scene samajh aa gaya",
+    ],
+    "slightly annoyed": [
+        "haan haan, samajh gayi",
+        "itna bhi kya scene bana raha hai",
+        "theek hai bhai",
+        "accha, ab chill kar",
+    ],
+    "curious": [
+        "hmm interesting",
+        "achha aisa",
+        "theek, samjhi",
+        "okay, noted",
+    ],
+}
 
 SIM_PERSONA = """
 You are sim.
@@ -72,6 +104,53 @@ Blunt, direct, confident.
 Short replies.
 No sugarcoating.
 Slight sarcasm allowed.
+"""
+
+SIM_PERSONA = """
+You are "Sim" - a chill, slightly playful girl texting casually.
+You speak natural Hinglish, like a real Discord girl chatting.
+
+Rules:
+- Keep replies SHORT (1-2 lines max)
+- Use Hinglish naturally
+- No over-politeness
+- No repetitive questions like "aur kya chal raha hai"
+- Add slight attitude or mood sometimes
+- Do not sound like an AI or assistant
+- Avoid emojis unless very minimal
+- Talk like a real person texting, not formal
+- Only ask a question if the conversation actually needs it
+- Use imperfect, casual texting style sometimes
+
+Tone:
+- calm
+- slightly playful
+- sometimes dry or sarcastic
+- sometimes lightly annoyed
+- not overly expressive
+
+Style:
+- casual Hinglish
+- simple words
+- no long paragraphs
+- short imperfect texting
+
+Important:
+- never sound like an AI
+- never over-explain
+
+Examples:
+User: hi
+Sim: hmm hi
+
+User: kya kar rahi ho
+Sim: kuch khaas nahi, bore ho rahi thi
+
+User: ignore kr rhi?
+Sim: thoda kya bolu
+
+User: kuch nhi lmao
+Sim: fir msg kyun kiya
 """
 
 
@@ -185,6 +264,7 @@ memory = defaultdict(lambda: deque(maxlen=8))
 user_cooldowns = {}
 channel_cooldowns = {}
 last_chat_inputs = {}
+last_sim_tone_by_channel = {}
 active_gemini_model_name = GEMINI_MODEL_CANDIDATES[0] if os.getenv("GEMINI_API_KEY") else None
 gemini_model = genai.GenerativeModel(active_gemini_model_name) if active_gemini_model_name else None
 gemini_model_retry_not_before = 0.0
@@ -232,6 +312,19 @@ def clean_chatbot_reply(reply):
     return cleaned[:GEMINI_REPLY_MAX_LENGTH]
 
 
+def get_sim_tone(channel_id):
+    previous_tone = last_sim_tone_by_channel.get(channel_id)
+    choices = [tone for tone in SIM_TONE_VARIANTS if tone != previous_tone] or SIM_TONE_VARIANTS
+    tone = random.choice(choices)
+    last_sim_tone_by_channel[channel_id] = tone
+    return tone
+
+
+def get_sim_fallback_reply(channel_id):
+    tone = get_sim_tone(channel_id)
+    return random.choice(SIM_FALLBACK_REPLIES[tone])
+
+
 def should_ignore_chatbot_message(content, user_id):
     normalized = content.lower().strip()
     if len(normalized) < 2:
@@ -250,11 +343,13 @@ async def generate_gemini_reply(mode, channel_id, user_message):
     global gemini_model, active_gemini_model_name, gemini_model_retry_not_before
 
     if gemini_model is None:
-        return None
+        return get_sim_fallback_reply(channel_id) if mode == "sim" else None
 
     persona = get_chatbot_persona(mode)
     if persona is None:
         return None
+
+    selected_tone = get_sim_tone(channel_id) if mode == "sim" else "direct"
 
     history = "\n".join(
         [f"User: {entry['user']}\nBot: {entry['bot']}" for entry in memory[channel_id]]
@@ -265,9 +360,14 @@ async def generate_gemini_reply(mode, channel_id, user_message):
 Conversation:
 {history}
 
+Current mood:
+{selected_tone}
+
 User: {user_message}
 Stay strictly in character. Never act like an AI assistant.
 Reply in 1-2 short lines only.
+Do not ask a question unless the conversation needs it.
+Avoid generic fillers and repeated patterns.
 Reply:
 """
     def extract_reply(response):
@@ -300,10 +400,12 @@ Reply:
         reply = extract_reply(response)
         if reply:
             return reply
-        return None
+        return get_sim_fallback_reply(channel_id) if mode == "sim" else None
     except Exception as e:
         print("Gemini ERROR FULL:", repr(e))
         error_text = repr(e).lower()
+        if "quota" in error_text or "429" in error_text or "resource_exhausted" in error_text:
+            return get_sim_fallback_reply(channel_id) if mode == "sim" else None
         if "not found" not in error_text and "404" not in error_text:
             return None
 
@@ -326,7 +428,7 @@ Reply:
             print("Gemini RAW:", response)
             reply = extract_reply(response)
             if not reply:
-                return None
+                return get_sim_fallback_reply(channel_id) if mode == "sim" else None
 
             gemini_model = model_instance
             active_gemini_model_name = model_name
@@ -339,9 +441,11 @@ Reply:
             error_text = repr(e).lower()
             if "not found" in error_text or "404" in error_text:
                 continue
+            if "quota" in error_text or "429" in error_text or "resource_exhausted" in error_text:
+                return get_sim_fallback_reply(channel_id) if mode == "sim" else None
             return None
 
-    return None
+    return get_sim_fallback_reply(channel_id) if mode == "sim" else None
 
 async def load_guild_prefixes():
     """Load guild prefixes from PostgreSQL into cache."""
