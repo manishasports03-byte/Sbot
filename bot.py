@@ -233,10 +233,24 @@ Reply:
 """
     try:
         response = await asyncio.to_thread(gemini_model.generate_content, prompt)
-        if not response or not getattr(response, "text", None):
+        print("Gemini RAW:", response)
+        if not response:
             return None
 
-        reply = clean_chatbot_reply(response.text.strip())
+        reply = None
+        if hasattr(response, "text") and response.text:
+            reply = response.text.strip()
+        elif hasattr(response, "candidates"):
+            try:
+                reply = response.candidates[0].content.parts[0].text.strip()
+            except Exception:
+                reply = None
+
+        if not reply:
+            print("Gemini returned empty response")
+            return None
+
+        reply = clean_chatbot_reply(reply)
         if not reply:
             return None
 
