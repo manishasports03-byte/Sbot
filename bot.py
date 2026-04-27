@@ -3,166 +3,26 @@ import random
 import re
 import copy
 import io
-import time
 import asyncpg
 import aiohttp
 from datetime import datetime, timezone, timedelta
-from collections import defaultdict, deque
+from collections import defaultdict
 import asyncio
 
 import discord
-import google.generativeai as genai
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 DEFAULT_PREFIX = "."
 BOT_START_TIME = datetime.now(timezone.utc)
-STARTUP_UPDATE_TEXT = "Fix startup notice update text lookup"
-GEMINI_MODEL_CANDIDATES = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash-latest",
-    "gemini-pro",
-]
-GEMINI_REPLY_MAX_LENGTH = 120
-GEMINI_USER_COOLDOWN_SECONDS = 4
-GEMINI_CHANNEL_COOLDOWN_SECONDS = 2
-GEMINI_MODEL_RETRY_BACKOFF_SECONDS = 1.5
-SIM_TONE_VARIANTS = [
-    "dry",
-    "playful",
-    "slightly annoyed",
-    "curious",
-]
-SIM_FALLBACK_REPLIES = {
-    "dry": [
-        "hmm theek",
-        "haan samajh gayi",
-        "achha phir",
-        "theek hai, zyada dramatic mat ho",
-    ],
-    "playful": [
-        "hmm cute",
-        "achha ji",
-        "theek hai, maan liya",
-        "okay, scene samajh aa gaya",
-    ],
-    "slightly annoyed": [
-        "haan haan, samajh gayi",
-        "itna bhi kya scene bana raha hai",
-        "theek hai bhai",
-        "accha, ab chill kar",
-    ],
-    "curious": [
-        "hmm interesting",
-        "achha aisa",
-        "theek, samjhi",
-        "okay, noted",
-    ],
-}
-
-SIM_PERSONA = """
-You are sim.
-
-You are a chill, slightly sarcastic girl.
-You speak casually in Hinglish.
-
-Rules:
-
-- Keep replies SHORT (1–2 lines max)
-- Do NOT overtalk
-- Do NOT be overly energetic
-- Limit emojis (0–1 max)
-- No cringe phrases like "chaos mode", "full energy", etc.
-- Sound natural, like a real person chatting
-
-Tone:
-
-- calm
-- slightly playful
-- sometimes dry or sarcastic
-- not overly expressive
-
-Style:
-
-- casual Hinglish
-- simple words
-- no long paragraphs
-
-Important:
-
-- never sound like an AI
-- never over-explain
-"""
-
-ANSH_PERSONA = """
-You are ansh.
-Blunt, direct, confident.
-Short replies.
-No sugarcoating.
-Slight sarcasm allowed.
-"""
-
-SIM_PERSONA = """
-You are "Sim" - a chill, slightly playful girl texting casually.
-You speak natural Hinglish, like a real Discord girl chatting.
-
-Rules:
-- Keep replies SHORT (1-2 lines max)
-- Use Hinglish naturally
-- No over-politeness
-- No repetitive questions like "aur kya chal raha hai"
-- Add slight attitude or mood sometimes
-- Do not sound like an AI or assistant
-- Avoid emojis unless very minimal
-- Talk like a real person texting, not formal
-- Only ask a question if the conversation actually needs it
-- Use imperfect, casual texting style sometimes
-
-Tone:
-- calm
-- slightly playful
-- sometimes dry or sarcastic
-- sometimes lightly annoyed
-- not overly expressive
-
-Style:
-- casual Hinglish
-- simple words
-- no long paragraphs
-- short imperfect texting
-
-Important:
-- never sound like an AI
-- never over-explain
-
-Examples:
-User: hi
-Sim: hmm hi
-
-User: kya kar rahi ho
-Sim: kuch khaas nahi, bore ho rahi thi
-
-User: ignore kr rhi?
-Sim: thoda kya bolu
-
-User: kuch nhi lmao
-Sim: fir msg kyun kiya
-"""
 
 
 def get_command_prefix(bot_instance, message):
     if not message.guild:
         return DEFAULT_PREFIX
     return guild_prefix_cache.get(message.guild.id, DEFAULT_PREFIX)
-
-
-def get_latest_update_text():
-    return STARTUP_UPDATE_TEXT.strip() or "bot updated"
-
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -196,7 +56,6 @@ NO_PREFIX_COMMANDS = {
     "messages", "m", "addmessages", "removemessages",
     "blacklistchannel", "unblacklistchannel", "blacklistedchannels", "clearmessages", "resetmymessages",
     "autoresponder", "autoreact", "sticky",
-    "chatbot", "chatmode",
     "lb", "leaderboard",
     "warn", "mute", "unmute", "kick", "ban", "purge", "slowmode",
     "gstart", "gend", "greroll",
@@ -258,19 +117,6 @@ spam_tracker = defaultdict(list)  # {user_id: [timestamps]}
 SPAM_THRESHOLD = 5  # messages in SPAM_WINDOW
 SPAM_WINDOW = 5  # seconds
 SPAM_MUTE_DURATION = 300  # 5 minutes
-chat_modes = {}  # {channel_id: mode}
-mention_mode = {}  # {channel_id: bool}
-memory = defaultdict(lambda: deque(maxlen=8))
-user_cooldowns = {}
-channel_cooldowns = {}
-last_chat_inputs = {}
-last_sim_tone_by_channel = {}
-active_gemini_model_name = GEMINI_MODEL_CANDIDATES[0] if os.getenv("GEMINI_API_KEY") else None
-gemini_model = genai.GenerativeModel(active_gemini_model_name) if active_gemini_model_name else None
-gemini_model_retry_not_before = 0.0
-if gemini_model is not None:
-    print("Using Gemini model:", getattr(gemini_model, "model_name", active_gemini_model_name))
-
 # ===== MODERATION CONFIG =====
 warnings = defaultdict(lambda: defaultdict(int))  # {guild_id: {user_id: count}}
 moderation_logs = defaultdict(list)  # {guild_id: [log_entries]}
@@ -288,164 +134,6 @@ def message_has_blocked_link(message_content):
 
     return False
 
-
-def get_chatbot_persona(mode):
-    if mode == "sim":
-        return SIM_PERSONA
-    if mode == "ansh":
-        return ANSH_PERSONA
-    return None
-
-
-def clean_chatbot_content(content, bot_user_id):
-    cleaned = content.replace(f"<@{bot_user_id}>", "").replace(f"<@!{bot_user_id}>", "").strip()
-    cleaned = re.sub(r"[*_`~|>#]+", "", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned
-
-
-def clean_chatbot_reply(reply):
-    cleaned = re.sub(r"[*_`~|]+", "", reply or "")
-    cleaned = re.sub(r"[\U00010000-\U0010ffff]", "", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    cleaned = cleaned.replace("Bot:", "").strip()
-    return cleaned[:GEMINI_REPLY_MAX_LENGTH]
-
-
-def get_sim_tone(channel_id):
-    previous_tone = last_sim_tone_by_channel.get(channel_id)
-    choices = [tone for tone in SIM_TONE_VARIANTS if tone != previous_tone] or SIM_TONE_VARIANTS
-    tone = random.choice(choices)
-    last_sim_tone_by_channel[channel_id] = tone
-    return tone
-
-
-def get_sim_fallback_reply(channel_id):
-    tone = get_sim_tone(channel_id)
-    return random.choice(SIM_FALLBACK_REPLIES[tone])
-
-
-def should_ignore_chatbot_message(content, user_id):
-    normalized = content.lower().strip()
-    if len(normalized) < 2:
-        return True
-
-    if normalized in {"ok", "okay", "k", ".", "..", "...", "hm", "hmm"}:
-        return True
-
-    if last_chat_inputs.get(user_id) == normalized:
-        return True
-
-    return False
-
-
-async def generate_gemini_reply(mode, channel_id, user_message):
-    global gemini_model, active_gemini_model_name, gemini_model_retry_not_before
-
-    if gemini_model is None:
-        return get_sim_fallback_reply(channel_id) if mode == "sim" else None
-
-    persona = get_chatbot_persona(mode)
-    if persona is None:
-        return None
-
-    selected_tone = get_sim_tone(channel_id) if mode == "sim" else "direct"
-
-    history = "\n".join(
-        [f"User: {entry['user']}\nBot: {entry['bot']}" for entry in memory[channel_id]]
-    )
-    prompt = f"""
-{persona}
-
-Conversation:
-{history}
-
-Current mood:
-{selected_tone}
-
-User: {user_message}
-Stay strictly in character. Never act like an AI assistant.
-Reply in 1-2 short lines only.
-Do not ask a question unless the conversation needs it.
-Avoid generic fillers and repeated patterns.
-Reply:
-"""
-    def extract_reply(response):
-        if not response:
-            return None
-
-        reply = None
-        if hasattr(response, "text") and response.text:
-            reply = response.text.strip()
-        elif hasattr(response, "candidates"):
-            try:
-                reply = response.candidates[0].content.parts[0].text.strip()
-            except Exception:
-                reply = None
-
-        if not reply:
-            print("Gemini returned empty response")
-            return None
-
-        reply = clean_chatbot_reply(reply)
-        if not reply:
-            print("Gemini returned empty response")
-            return None
-
-        return reply
-
-    try:
-        response = await asyncio.to_thread(gemini_model.generate_content, prompt)
-        print("Gemini RAW:", response)
-        reply = extract_reply(response)
-        if reply:
-            return reply
-        return get_sim_fallback_reply(channel_id) if mode == "sim" else None
-    except Exception as e:
-        print("Gemini ERROR FULL:", repr(e))
-        error_text = repr(e).lower()
-        if "quota" in error_text or "429" in error_text or "resource_exhausted" in error_text:
-            return get_sim_fallback_reply(channel_id) if mode == "sim" else None
-        if "not found" not in error_text and "404" not in error_text:
-            return None
-
-    now = time.time()
-    if now < gemini_model_retry_not_before:
-        return None
-
-    await asyncio.sleep(GEMINI_MODEL_RETRY_BACKOFF_SECONDS)
-    gemini_model_retry_not_before = time.time() + GEMINI_MODEL_RETRY_BACKOFF_SECONDS
-
-    fallback_names = [
-        model_name for model_name in GEMINI_MODEL_CANDIDATES
-        if model_name != active_gemini_model_name
-    ]
-
-    for model_name in fallback_names:
-        model_instance = genai.GenerativeModel(model_name)
-        try:
-            response = await asyncio.to_thread(model_instance.generate_content, prompt)
-            print("Gemini RAW:", response)
-            reply = extract_reply(response)
-            if not reply:
-                return get_sim_fallback_reply(channel_id) if mode == "sim" else None
-
-            gemini_model = model_instance
-            active_gemini_model_name = model_name
-            gemini_model_retry_not_before = 0.0
-            print(f"[MODEL SWITCH] -> {model_name}")
-            print("Using Gemini model:", getattr(gemini_model, "model_name", active_gemini_model_name))
-            return reply
-        except Exception as e:
-            print("Gemini ERROR FULL:", repr(e))
-            error_text = repr(e).lower()
-            if "not found" in error_text or "404" in error_text:
-                continue
-            if "quota" in error_text or "429" in error_text or "resource_exhausted" in error_text:
-                return get_sim_fallback_reply(channel_id) if mode == "sim" else None
-            return None
-
-    return get_sim_fallback_reply(channel_id) if mode == "sim" else None
 
 async def load_guild_prefixes():
     """Load guild prefixes from PostgreSQL into cache."""
@@ -2055,12 +1743,9 @@ async def send_restart_notice():
             return False
 
     mentions = " and ".join(f"<@{user_id}>" for user_id in STARTUP_NOTIFY_USER_IDS)
-    latest_update = get_latest_update_text()
-
     message = (
         f"hi {mentions}\n"
-        "bot is back online ✅\n"
-        f"new update - {latest_update}"
+        "bot is back online ✅"
     )
 
     try:
@@ -4460,48 +4145,6 @@ async def on_message(message):
                         )
                         await message.channel.send(response)
                         break
-
-    mode = chat_modes.get(message.channel.id)
-    if mode and not is_command_message:
-        is_mentioned = bot.user in message.mentions
-        is_reply = message.reference is not None
-        if not (is_mentioned or is_reply):
-            await bot.process_commands(message)
-            return
-
-        content = clean_chatbot_content(message.content, bot.user.id)
-        if not content or should_ignore_chatbot_message(content, message.author.id):
-            await bot.process_commands(message)
-            return
-
-        now = time.time()
-        user_last_used = user_cooldowns.get(message.author.id, 0)
-        channel_last_used = channel_cooldowns.get(message.channel.id, 0)
-        if now - user_last_used < GEMINI_USER_COOLDOWN_SECONDS:
-            await bot.process_commands(message)
-            return
-        if now - channel_last_used < GEMINI_CHANNEL_COOLDOWN_SECONDS:
-            await bot.process_commands(message)
-            return
-
-        user_cooldowns[message.author.id] = now
-        channel_cooldowns[message.channel.id] = now
-        last_chat_inputs[message.author.id] = content.lower()
-        try:
-            async with message.channel.typing():
-                reply = await generate_gemini_reply(mode, message.channel.id, content)
-            if not reply:
-                await bot.process_commands(message)
-                return
-
-            memory[message.channel.id].append({
-                "user": content,
-                "bot": reply,
-            })
-            await message.reply(reply, mention_author=False)
-        except Exception as e:
-            print("Gemini ERROR FULL:", repr(e))
-
     await bot.process_commands(message)
 
 
@@ -5001,12 +4644,6 @@ Leaderboard
             title="Automation",
             color=discord.Color.from_str("#2b2d31"),
             description="""
-▶ `chatbot sim` - Enable Gemini chatbot in sim mode
-▶ `chatbot ansh` - Enable Gemini chatbot in ansh mode
-▶ `chatbot off` - Disable chatbot in this channel
-▶ `chatmode mention` - Reply only when the bot is mentioned
-▶ `chatmode free` - Reply to all non-command messages
-
 ▶ `autoresponder add <trigger> <response>` - Add autoresponder
 ▶ `autoresponder remove <trigger>` - Remove autoresponder
 ▶ `autoresponder show` - Show autoresponders
@@ -5099,52 +4736,6 @@ class HelpView(discord.ui.View):
             embed=get_help_module_embed(select.values[0]),
             view=ModuleView(),
         )
-
-
-@bot.command(name="chatbot")
-async def chatbot_command(ctx, mode: str = None):
-    if not mode:
-        await ctx.send("Use: `.chatbot sim / ansh / off`")
-        return
-
-    mode = mode.lower()
-
-    if mode == "off":
-        chat_modes.pop(ctx.channel.id, None)
-        await ctx.send("❌ Chatbot disabled.")
-        return
-
-    if mode not in {"sim", "ansh"}:
-        await ctx.send("Invalid mode.")
-        return
-
-    if gemini_model is None:
-        await ctx.send("Set `GEMINI_API_KEY` in `.env` before enabling chatbot mode.")
-        return
-
-    chat_modes[ctx.channel.id] = mode
-    await ctx.send(f"✅ Chatbot set to **{mode}** mode.")
-
-
-@bot.command(name="chatmode")
-async def chatmode_command(ctx, mode: str = None):
-    if not mode:
-        await ctx.send("Use: `.chatmode mention / free`")
-        return
-
-    mode = mode.lower()
-
-    if mode == "mention":
-        mention_mode[ctx.channel.id] = True
-        await ctx.send("🎯 Chatbot will reply only when mentioned.")
-        return
-
-    if mode == "free":
-        mention_mode[ctx.channel.id] = False
-        await ctx.send("💬 Chatbot will reply to all messages.")
-        return
-
-    await ctx.send("Invalid mode.")
 
 
 @bot.command(name="help", aliases=["commands", "cmd"])
@@ -5293,3 +4884,4 @@ if not token:
     raise RuntimeError("DISCORD_TOKEN is not set. Add it to .env before starting the bot.")
 
 bot.run(token)
+
