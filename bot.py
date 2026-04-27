@@ -27,17 +27,43 @@ GEMINI_MODEL_CANDIDATES = [
     "gemini-1.5-flash-latest",
     "gemini-pro",
 ]
-GEMINI_REPLY_MAX_LENGTH = 250
+GEMINI_REPLY_MAX_LENGTH = 120
 GEMINI_USER_COOLDOWN_SECONDS = 4
 GEMINI_CHANNEL_COOLDOWN_SECONDS = 2
+GEMINI_MODEL_RETRY_BACKOFF_SECONDS = 1.5
 
 SIM_PERSONA = """
 You are sim.
-Speak casually, fun, slightly chaotic.
-Use Hinglish + slang (arey, nahh, shyt).
-Keep replies short-medium.
-Be chill, friendly, playful.
-Don't sound like AI.
+
+You are a chill, slightly sarcastic girl.
+You speak casually in Hinglish.
+
+Rules:
+
+- Keep replies SHORT (1–2 lines max)
+- Do NOT overtalk
+- Do NOT be overly energetic
+- Limit emojis (0–1 max)
+- No cringe phrases like "chaos mode", "full energy", etc.
+- Sound natural, like a real person chatting
+
+Tone:
+
+- calm
+- slightly playful
+- sometimes dry or sarcastic
+- not overly expressive
+
+Style:
+
+- casual Hinglish
+- simple words
+- no long paragraphs
+
+Important:
+
+- never sound like an AI
+- never over-explain
 """
 
 ANSH_PERSONA = """
@@ -161,6 +187,7 @@ channel_cooldowns = {}
 last_chat_inputs = {}
 active_gemini_model_name = GEMINI_MODEL_CANDIDATES[0] if os.getenv("GEMINI_API_KEY") else None
 gemini_model = genai.GenerativeModel(active_gemini_model_name) if active_gemini_model_name else None
+gemini_model_retry_not_before = 0.0
 if gemini_model is not None:
     print("Using Gemini model:", getattr(gemini_model, "model_name", active_gemini_model_name))
 
@@ -199,6 +226,7 @@ def clean_chatbot_content(content, bot_user_id):
 
 def clean_chatbot_reply(reply):
     cleaned = re.sub(r"[*_`~|]+", "", reply or "")
+    cleaned = re.sub(r"[\U00010000-\U0010ffff]", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     cleaned = cleaned.replace("Bot:", "").strip()
     return cleaned[:GEMINI_REPLY_MAX_LENGTH]
@@ -219,7 +247,7 @@ def should_ignore_chatbot_message(content, user_id):
 
 
 async def generate_gemini_reply(mode, channel_id, user_message):
-    global gemini_model, active_gemini_model_name
+    global gemini_model, active_gemini_model_name, gemini_model_retry_not_before
 
     if gemini_model is None:
         return None
@@ -239,43 +267,72 @@ Conversation:
 
 User: {user_message}
 Stay strictly in character. Never act like an AI assistant.
+Reply in 1-2 short lines only.
 Reply:
 """
-    candidate_names = [active_gemini_model_name] + [
+    def extract_reply(response):
+        if not response:
+            return None
+
+        reply = None
+        if hasattr(response, "text") and response.text:
+            reply = response.text.strip()
+        elif hasattr(response, "candidates"):
+            try:
+                reply = response.candidates[0].content.parts[0].text.strip()
+            except Exception:
+                reply = None
+
+        if not reply:
+            print("Gemini returned empty response")
+            return None
+
+        reply = clean_chatbot_reply(reply)
+        if not reply:
+            print("Gemini returned empty response")
+            return None
+
+        return reply
+
+    try:
+        response = await asyncio.to_thread(gemini_model.generate_content, prompt)
+        print("Gemini RAW:", response)
+        reply = extract_reply(response)
+        if reply:
+            return reply
+        return None
+    except Exception as e:
+        print("Gemini ERROR FULL:", repr(e))
+        error_text = repr(e).lower()
+        if "not found" not in error_text and "404" not in error_text:
+            return None
+
+    now = time.time()
+    if now < gemini_model_retry_not_before:
+        return None
+
+    await asyncio.sleep(GEMINI_MODEL_RETRY_BACKOFF_SECONDS)
+    gemini_model_retry_not_before = time.time() + GEMINI_MODEL_RETRY_BACKOFF_SECONDS
+
+    fallback_names = [
         model_name for model_name in GEMINI_MODEL_CANDIDATES
         if model_name != active_gemini_model_name
     ]
 
-    for model_name in candidate_names:
-        model_instance = gemini_model if model_name == active_gemini_model_name else genai.GenerativeModel(model_name)
+    for model_name in fallback_names:
+        model_instance = genai.GenerativeModel(model_name)
         try:
             response = await asyncio.to_thread(model_instance.generate_content, prompt)
             print("Gemini RAW:", response)
-            if not response:
-                continue
-
-            reply = None
-            if hasattr(response, "text") and response.text:
-                reply = response.text.strip()
-            elif hasattr(response, "candidates"):
-                try:
-                    reply = response.candidates[0].content.parts[0].text.strip()
-                except Exception:
-                    reply = None
-
+            reply = extract_reply(response)
             if not reply:
-                print("Gemini returned empty response")
-                continue
+                return None
 
-            reply = clean_chatbot_reply(reply)
-            if not reply:
-                continue
-
-            if model_name != active_gemini_model_name:
-                gemini_model = model_instance
-                active_gemini_model_name = model_name
-                print("Using Gemini model:", getattr(gemini_model, "model_name", active_gemini_model_name))
-
+            gemini_model = model_instance
+            active_gemini_model_name = model_name
+            gemini_model_retry_not_before = 0.0
+            print(f"[MODEL SWITCH] -> {model_name}")
+            print("Using Gemini model:", getattr(gemini_model, "model_name", active_gemini_model_name))
             return reply
         except Exception as e:
             print("Gemini ERROR FULL:", repr(e))
