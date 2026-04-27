@@ -22,8 +22,9 @@ DEFAULT_PREFIX = "."
 BOT_START_TIME = datetime.now(timezone.utc)
 STARTUP_UPDATE_TEXT = "Fix startup notice update text lookup"
 GEMINI_MODEL_NAME = "gemini-1.5-flash"
-GEMINI_REPLY_MAX_LENGTH = 300
-GEMINI_COOLDOWN_SECONDS = 3
+GEMINI_REPLY_MAX_LENGTH = 250
+GEMINI_USER_COOLDOWN_SECONDS = 4
+GEMINI_CHANNEL_COOLDOWN_SECONDS = 2
 
 SIM_PERSONA = """
 You are sim.
@@ -150,7 +151,9 @@ SPAM_MUTE_DURATION = 300  # 5 minutes
 chat_modes = {}  # {channel_id: mode}
 mention_mode = {}  # {channel_id: bool}
 memory = defaultdict(lambda: deque(maxlen=8))
-cooldowns = {}
+user_cooldowns = {}
+channel_cooldowns = {}
+last_chat_inputs = {}
 gemini_model = genai.GenerativeModel(GEMINI_MODEL_NAME) if os.getenv("GEMINI_API_KEY") else None
 
 # ===== MODERATION CONFIG =====
@@ -189,16 +192,31 @@ def clean_chatbot_content(content, bot_user_id):
 def clean_chatbot_reply(reply):
     cleaned = re.sub(r"[*_`~|]+", "", reply or "")
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = cleaned.replace("Bot:", "").strip()
     return cleaned[:GEMINI_REPLY_MAX_LENGTH]
+
+
+def should_ignore_chatbot_message(content, user_id):
+    normalized = content.lower().strip()
+    if len(normalized) < 2:
+        return True
+
+    if normalized in {"ok", "okay", "k", ".", "..", "...", "hm", "hmm"}:
+        return True
+
+    if last_chat_inputs.get(user_id) == normalized:
+        return True
+
+    return False
 
 
 async def generate_gemini_reply(mode, channel_id, user_message):
     if gemini_model is None:
-        raise RuntimeError("GEMINI_API_KEY is not set.")
+        return None
 
     persona = get_chatbot_persona(mode)
     if persona is None:
-        raise ValueError("Invalid chatbot mode.")
+        return None
 
     history = "\n".join(
         [f"User: {entry['user']}\nBot: {entry['bot']}" for entry in memory[channel_id]]
@@ -210,14 +228,22 @@ Conversation:
 {history}
 
 User: {user_message}
-Reply naturally:
+Stay strictly in character. Never act like an AI assistant.
+Reply:
 """
-    response = await asyncio.to_thread(gemini_model.generate_content, prompt)
-    reply = clean_chatbot_reply(getattr(response, "text", "") or "")
-    if not reply:
-        raise RuntimeError("Gemini returned an empty response.")
+    try:
+        response = await asyncio.to_thread(gemini_model.generate_content, prompt)
+        if not response or not getattr(response, "text", None):
+            return None
 
-    return reply
+        reply = clean_chatbot_reply(response.text.strip())
+        if not reply:
+            return None
+
+        return reply
+    except Exception as e:
+        print("Gemini ERROR FULL:", repr(e))
+        return None
 
 async def load_guild_prefixes():
     """Load guild prefixes from PostgreSQL into cache."""
@@ -4235,30 +4261,44 @@ async def on_message(message):
 
     mode = chat_modes.get(message.channel.id)
     if mode and not is_command_message:
-        require_mention = mention_mode.get(message.channel.id, False)
-        if require_mention and bot.user not in message.mentions:
+        is_mentioned = bot.user in message.mentions
+        is_reply = message.reference is not None
+        if not (is_mentioned or is_reply):
             await bot.process_commands(message)
             return
 
         content = clean_chatbot_content(message.content, bot.user.id)
-        if not content:
+        if not content or should_ignore_chatbot_message(content, message.author.id):
             await bot.process_commands(message)
             return
 
-        last_used = cooldowns.get(message.author.id, 0)
-        if time.time() - last_used >= GEMINI_COOLDOWN_SECONDS:
-            cooldowns[message.author.id] = time.time()
-            try:
-                async with message.channel.typing():
-                    reply = await generate_gemini_reply(mode, message.channel.id, content)
-                memory[message.channel.id].append({
-                    "user": content,
-                    "bot": reply,
-                })
-                await message.reply(reply, mention_author=False)
-            except Exception as e:
-                print("Gemini Error:", e)
-                await message.reply("try again in a sec", mention_author=False)
+        now = time.time()
+        user_last_used = user_cooldowns.get(message.author.id, 0)
+        channel_last_used = channel_cooldowns.get(message.channel.id, 0)
+        if now - user_last_used < GEMINI_USER_COOLDOWN_SECONDS:
+            await bot.process_commands(message)
+            return
+        if now - channel_last_used < GEMINI_CHANNEL_COOLDOWN_SECONDS:
+            await bot.process_commands(message)
+            return
+
+        user_cooldowns[message.author.id] = now
+        channel_cooldowns[message.channel.id] = now
+        last_chat_inputs[message.author.id] = content.lower()
+        try:
+            async with message.channel.typing():
+                reply = await generate_gemini_reply(mode, message.channel.id, content)
+            if not reply:
+                await bot.process_commands(message)
+                return
+
+            memory[message.channel.id].append({
+                "user": content,
+                "bot": reply,
+            })
+            await message.reply(reply, mention_author=False)
+        except Exception as e:
+            print("Gemini ERROR FULL:", repr(e))
 
     await bot.process_commands(message)
 
