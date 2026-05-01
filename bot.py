@@ -86,6 +86,7 @@ TICKET_BUTTON_COOLDOWN_SECONDS = 15
 ticket_button_cooldowns = {}
 MEDIA_ONLY_CHANNEL_ID = 1379065330957160560
 VERIFIED_ROLE_ID = 1442882228802551971
+VERIFIED_BONUS_ROLE_ID = 1499789428703363275
 AUTORESPONDER_COOLDOWN_SECONDS = 2
 autoresponder_cooldowns = {}
 LINK_FILTER_GUILD_ID = 1218837762753564722
@@ -1775,6 +1776,41 @@ async def ensure_verified_role_media_access():
             print(f"Failed to update media access in {guild.name}")
 
 
+async def ensure_verified_bonus_role(member):
+    if member.bot:
+        return
+
+    verified_role = member.guild.get_role(VERIFIED_ROLE_ID)
+    bonus_role = member.guild.get_role(VERIFIED_BONUS_ROLE_ID)
+    if verified_role is None or bonus_role is None:
+        return
+
+    if verified_role not in member.roles or bonus_role in member.roles:
+        return
+
+    try:
+        await member.add_roles(
+            bonus_role,
+            reason="Auto-assigned because member has the verified role",
+        )
+    except discord.Forbidden:
+        print(f"Missing permissions to assign verified bonus role for {member}")
+    except discord.HTTPException:
+        print(f"Failed to assign verified bonus role for {member}")
+
+
+async def sync_verified_bonus_roles():
+    for guild in bot.guilds:
+        verified_role = guild.get_role(VERIFIED_ROLE_ID)
+        bonus_role = guild.get_role(VERIFIED_BONUS_ROLE_ID)
+        if verified_role is None or bonus_role is None:
+            continue
+
+        for member in verified_role.members:
+            if bonus_role not in member.roles:
+                await ensure_verified_bonus_role(member)
+
+
 async def handle_role_toggle(message):
     if not message.guild:
         await message.channel.send("Role changes only work inside a server.")
@@ -2396,6 +2432,7 @@ async def on_ready():
     bot.add_view(TicketStaffControlsView())
     await ensure_ticket_panel()
     await ensure_verified_role_media_access()
+    await sync_verified_bonus_roles()
     
     # Cache all server invites
     for guild in bot.guilds:
@@ -2425,6 +2462,8 @@ async def on_member_join(member):
     """Handle member join and track invites"""
     guild = member.guild
 
+    await ensure_verified_bonus_role(member)
+
     # ===== INVITE TRACKING =====
     try:
         # Get current invites
@@ -2453,6 +2492,14 @@ async def on_member_join(member):
         pass
     except Exception as e:
         print(f"Error tracking invite for {member}: {e}")
+
+
+@bot.event
+async def on_member_update(before, after):
+    if before.roles == after.roles:
+        return
+
+    await ensure_verified_bonus_role(after)
 
 
 # ===== TEMP VC SYSTEM =====
