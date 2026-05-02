@@ -98,12 +98,16 @@ BLOCKED_WIZARDS_CATEGORY_IDS = {
 }
 WIZARDS_SEND_CATEGORY_IDS = {
     1379095007503323156,
+    1379083372998955099,
 }
 BLOCKED_WIZARDS_CHANNEL_IDS = {
     1493973652100874371,
 }
 WIZARDS_ALLOWED_VOICE_CHANNEL_IDS = {
     1494320978564612277,
+}
+WIZARDS_ALLOWED_VOICE_CATEGORY_IDS = {
+    1379083372998955099,
 }
 WIZARDS_VIEW_ONLY_VOICE_CHANNEL_IDS = {
     1379100622309036204,
@@ -2140,6 +2144,8 @@ async def apply_membership_channel_access(guild):
             channel.id not in BLOCKED_WIZARDS_CATEGORY_IDS
             and channel_category_id not in BLOCKED_WIZARDS_CATEGORY_IDS
         )
+        if channel_category_id in WIZARDS_SEND_CATEGORY_IDS:
+            wizard_can_view = True
         wizard_can_send = (
             channel.id in WIZARDS_SEND_CATEGORY_IDS
             or channel_category_id in WIZARDS_SEND_CATEGORY_IDS
@@ -2149,6 +2155,7 @@ async def apply_membership_channel_access(guild):
             wizard_can_view = True
         wizard_can_connect = (
             channel.id in WIZARDS_ALLOWED_VOICE_CHANNEL_IDS
+            or channel_category_id in WIZARDS_ALLOWED_VOICE_CATEGORY_IDS
             or (
                 channel_category_id == WIZARDS_VOICE_CATEGORY_ID
                 and channel.id != RESTRICTED_WIZARDS_VOICE_CHANNEL_ID
