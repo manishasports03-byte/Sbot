@@ -99,6 +99,15 @@ BLOCKED_WIZARDS_CATEGORY_IDS = {
 WIZARDS_SEND_CATEGORY_IDS = {
     1379095007503323156,
 }
+BLOCKED_WIZARDS_CHANNEL_IDS = {
+    1493973652100874371,
+}
+WIZARDS_ALLOWED_VOICE_CHANNEL_IDS = {
+    1494320978564612277,
+}
+WIZARDS_VOICE_CATEGORY_ID = 1379052516863381637
+RESTRICTED_WIZARDS_VOICE_CHANNEL_ID = 1379826132509262025
+SPECIAL_WIZARDS_VOICE_ACCESS_ROLE_ID = 1379461606127177728
 BIRTHDAY_ROLE_ID = 1380464856016097341
 VIRELYA_ROLE_ID = 1499783835594788894
 SEARASTA_ROLE_ID = 1499785700533473290
@@ -2062,6 +2071,8 @@ async def apply_membership_channel_access(guild):
     wizards_role = guild.get_role(WIZARDS_ROLE_ID)
     unverified_role = guild.get_role(UNVERIFIED_ROLE_ID)
     os_role = guild.get_role(OS_ROLE_ID)
+    voice_role = guild.get_role(VOICE_ROLE_ID)
+    special_voice_role = guild.get_role(SPECIAL_WIZARDS_VOICE_ACCESS_ROLE_ID)
     if wizards_role is None or unverified_role is None:
         return
 
@@ -2117,6 +2128,8 @@ async def apply_membership_channel_access(guild):
 
         channel_category_id = getattr(channel, "category_id", None)
         wizard_can_view = (
+            channel.id not in BLOCKED_WIZARDS_CHANNEL_IDS
+            and
             channel.id not in BLOCKED_WIZARDS_CATEGORY_IDS
             and channel_category_id not in BLOCKED_WIZARDS_CATEGORY_IDS
         )
@@ -2124,14 +2137,42 @@ async def apply_membership_channel_access(guild):
             channel.id in WIZARDS_SEND_CATEGORY_IDS
             or channel_category_id in WIZARDS_SEND_CATEGORY_IDS
         )
+        is_voice_channel = isinstance(channel, (discord.VoiceChannel, discord.StageChannel))
+        wizard_can_connect = (
+            channel.id in WIZARDS_ALLOWED_VOICE_CHANNEL_IDS
+            or (
+                channel_category_id == WIZARDS_VOICE_CATEGORY_ID
+                and channel.id != RESTRICTED_WIZARDS_VOICE_CHANNEL_ID
+            )
+        )
 
         try:
             await channel.set_permissions(unverified_role, view_channel=False)
-            await channel.set_permissions(
-                wizards_role,
-                view_channel=wizard_can_view,
-                send_messages=True if wizard_can_send else None,
-            )
+            if is_voice_channel:
+                await channel.set_permissions(
+                    wizards_role,
+                    view_channel=wizard_can_view,
+                    connect=wizard_can_connect,
+                )
+                if channel.id == RESTRICTED_WIZARDS_VOICE_CHANNEL_ID:
+                    if special_voice_role is not None:
+                        await channel.set_permissions(
+                            special_voice_role,
+                            view_channel=True,
+                            connect=True,
+                        )
+                    if voice_role is not None:
+                        await channel.set_permissions(
+                            voice_role,
+                            view_channel=True,
+                            connect=True,
+                        )
+            else:
+                await channel.set_permissions(
+                    wizards_role,
+                    view_channel=wizard_can_view,
+                    send_messages=True if wizard_can_send else None,
+                )
         except discord.Forbidden:
             print(f"Missing permissions to update membership access for {channel} in {guild.name}")
         except discord.HTTPException:
