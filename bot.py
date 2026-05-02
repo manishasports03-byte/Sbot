@@ -87,6 +87,17 @@ ticket_button_cooldowns = {}
 MEDIA_ONLY_CHANNEL_ID = 1379065330957160560
 VERIFIED_ROLE_ID = 1442882228802551971
 VERIFIED_BONUS_ROLE_ID = 1499789428703363275
+BIRTHDAY_ROLE_ID = 1380464856016097341
+VIRELYA_ROLE_ID = 1499783835594788894
+SEARASTA_ROLE_ID = 1499785700533473290
+ARCHWIZARD_ROLE_ID = 1499785874559209532
+OS_ROLE_ID = 1499980794133876857
+DEFAULT_PERMISSION_ROLE_LINKS = (
+    (VIRELYA_ROLE_ID, OS_ROLE_ID),
+    (SEARASTA_ROLE_ID, OS_ROLE_ID),
+    (ARCHWIZARD_ROLE_ID, OS_ROLE_ID),
+)
+IST = timezone(timedelta(hours=5, minutes=30))
 AUTORESPONDER_COOLDOWN_SECONDS = 2
 autoresponder_cooldowns = {}
 LINK_FILTER_GUILD_ID = 1218837762753564722
@@ -285,6 +296,23 @@ async def create_tables():
         CREATE TABLE IF NOT EXISTS sticky_messages (
             guild_id BIGINT PRIMARY KEY,
             message TEXT
+        )
+    """)
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS birthday_users (
+            guild_id BIGINT,
+            user_id BIGINT,
+            birth_month INTEGER,
+            birth_day INTEGER,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    """)
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS permission_role_links (
+            guild_id BIGINT,
+            source_role_id BIGINT,
+            target_role_id BIGINT,
+            PRIMARY KEY (guild_id, source_role_id, target_role_id)
         )
     """)
     print("Tables ensured/created")
@@ -566,6 +594,105 @@ async def reset_daily_message_counts_if_needed():
 
     await db_execute("UPDATE message_stats SET daily_messages = 0", log_context="Reset daily message counts")
     await set_state_value(MESSAGE_DAILY_RESET_KEY, today)
+
+
+async def set_birthday(guild_id, user_id, birth_month, birth_day):
+    await db_execute(
+        """
+        INSERT INTO birthday_users (guild_id, user_id, birth_month, birth_day)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (guild_id, user_id)
+        DO UPDATE SET
+            birth_month = EXCLUDED.birth_month,
+            birth_day = EXCLUDED.birth_day
+        """,
+        guild_id,
+        user_id,
+        birth_month,
+        birth_day,
+        log_context=f"Saved birthday for user {user_id} in guild {guild_id}",
+    )
+
+
+async def remove_birthday(guild_id, user_id):
+    await db_execute(
+        "DELETE FROM birthday_users WHERE guild_id = $1 AND user_id = $2",
+        guild_id,
+        user_id,
+        log_context=f"Removed birthday for user {user_id} in guild {guild_id}",
+    )
+
+
+async def get_birthday(guild_id, user_id):
+    return await db_fetchrow(
+        "SELECT birth_month, birth_day FROM birthday_users WHERE guild_id = $1 AND user_id = $2",
+        guild_id,
+        user_id,
+        log_fetch=False,
+    )
+
+
+async def get_birthdays_for_day(birth_month, birth_day):
+    return await db_fetch(
+        "SELECT guild_id, user_id FROM birthday_users WHERE birth_month = $1 AND birth_day = $2",
+        birth_month,
+        birth_day,
+        log_fetch=False,
+    )
+
+
+def get_ist_today():
+    return datetime.now(IST).date()
+
+
+async def add_permission_role_link(guild_id, source_role_id, target_role_id):
+    await db_execute(
+        """
+        INSERT INTO permission_role_links (guild_id, source_role_id, target_role_id)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id, source_role_id, target_role_id)
+        DO NOTHING
+        """,
+        guild_id,
+        source_role_id,
+        target_role_id,
+        log_context=f"Saved permission role link {source_role_id} -> {target_role_id} in guild {guild_id}",
+    )
+
+
+async def remove_permission_role_link(guild_id, source_role_id, target_role_id):
+    await db_execute(
+        "DELETE FROM permission_role_links WHERE guild_id = $1 AND source_role_id = $2 AND target_role_id = $3",
+        guild_id,
+        source_role_id,
+        target_role_id,
+        log_context=f"Removed permission role link {source_role_id} -> {target_role_id} in guild {guild_id}",
+    )
+
+
+async def get_permission_role_links(guild_id):
+    return await db_fetch(
+        """
+        SELECT source_role_id, target_role_id
+        FROM permission_role_links
+        WHERE guild_id = $1
+        ORDER BY target_role_id, source_role_id
+        """,
+        guild_id,
+        log_fetch=False,
+    )
+
+
+async def get_effective_permission_role_links(guild_id):
+    links = {(source_role_id, target_role_id) for source_role_id, target_role_id in DEFAULT_PERMISSION_ROLE_LINKS}
+
+    for row in await get_permission_role_links(guild_id):
+        links.add((row["source_role_id"], row["target_role_id"]))
+
+    return [
+        {"source_role_id": source_role_id, "target_role_id": target_role_id}
+        for source_role_id, target_role_id in sorted(links, key=lambda pair: (pair[1], pair[0]))
+    ]
 
 
 async def get_message_stats(guild_id, user_id):
@@ -1811,6 +1938,143 @@ async def sync_verified_bonus_roles():
                 await ensure_verified_bonus_role(member)
 
 
+async def ensure_birthday_role_visible():
+    for guild in bot.guilds:
+        birthday_role = guild.get_role(BIRTHDAY_ROLE_ID)
+        if birthday_role is None or birthday_role.hoist:
+            continue
+
+        try:
+            await birthday_role.edit(
+                hoist=True,
+                reason="Ensure birthday role stays visible on birthday",
+            )
+        except discord.Forbidden:
+            print(f"Missing permissions to update birthday role display in {guild.name}")
+        except discord.HTTPException:
+            print(f"Failed to update birthday role display in {guild.name}")
+
+
+async def sync_birthday_roles():
+    today = get_ist_today()
+    rows = await get_birthdays_for_day(today.month, today.day)
+    birthdays_by_guild = defaultdict(set)
+
+    for row in rows:
+        birthdays_by_guild[row["guild_id"]].add(row["user_id"])
+
+    for guild in bot.guilds:
+        birthday_role = guild.get_role(BIRTHDAY_ROLE_ID)
+        if birthday_role is None:
+            continue
+
+        should_have_role = birthdays_by_guild.get(guild.id, set())
+
+        for member in list(birthday_role.members):
+            if member.id in should_have_role:
+                continue
+
+            try:
+                await member.remove_roles(
+                    birthday_role,
+                    reason="Birthday role removed because the birthday ended",
+                )
+            except discord.Forbidden:
+                print(f"Missing permissions to remove birthday role for {member}")
+            except discord.HTTPException:
+                print(f"Failed to remove birthday role for {member}")
+
+        for user_id in should_have_role:
+            member = guild.get_member(user_id)
+            if member is None:
+                try:
+                    member = await guild.fetch_member(user_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    continue
+
+            if birthday_role in member.roles or member.bot:
+                continue
+
+            try:
+                await member.add_roles(
+                    birthday_role,
+                    reason="Birthday role assigned for today's birthday",
+                )
+            except discord.Forbidden:
+                print(f"Missing permissions to assign birthday role for {member}")
+            except discord.HTTPException:
+                print(f"Failed to assign birthday role for {member}")
+
+
+async def sync_permission_roles_for_member(member):
+    if member.bot:
+        return
+
+    links = await get_effective_permission_role_links(member.guild.id)
+    if not links:
+        return
+
+    source_role_ids = {role.id for role in member.roles}
+    managed_target_ids = {row["target_role_id"] for row in links}
+    desired_target_ids = {
+        row["target_role_id"]
+        for row in links
+        if row["source_role_id"] in source_role_ids
+    }
+
+    roles_to_add = []
+    roles_to_remove = []
+
+    for target_role_id in managed_target_ids:
+        target_role = member.guild.get_role(target_role_id)
+        if target_role is None:
+            continue
+
+        has_target_role = target_role in member.roles
+        should_have_target_role = target_role_id in desired_target_ids
+
+        if should_have_target_role and not has_target_role:
+            roles_to_add.append(target_role)
+        elif not should_have_target_role and has_target_role:
+            roles_to_remove.append(target_role)
+
+    if roles_to_add:
+        try:
+            await member.add_roles(
+                *roles_to_add,
+                reason="Auto-assigned permission bundle roles from source roles",
+            )
+        except discord.Forbidden:
+            print(f"Missing permissions to assign permission bundle roles for {member}")
+        except discord.HTTPException:
+            print(f"Failed to assign permission bundle roles for {member}")
+
+    if roles_to_remove:
+        try:
+            await member.remove_roles(
+                *roles_to_remove,
+                reason="Removed permission bundle roles because source roles no longer match",
+            )
+        except discord.Forbidden:
+            print(f"Missing permissions to remove permission bundle roles for {member}")
+        except discord.HTTPException:
+            print(f"Failed to remove permission bundle roles for {member}")
+
+
+async def sync_permission_roles_for_guild(guild):
+    links = await get_effective_permission_role_links(guild.id)
+    if not links:
+        return
+
+    for member in guild.members:
+        await sync_permission_roles_for_member(member)
+
+
+async def sync_permission_roles_for_all_guilds():
+    for guild in bot.guilds:
+        await sync_permission_roles_for_guild(guild)
+
+
 async def handle_role_toggle(message):
     if not message.guild:
         await message.channel.send("Role changes only work inside a server.")
@@ -2419,6 +2683,12 @@ async def reset_daily_messages_loop():
     await reset_daily_message_counts_if_needed()
 
 
+@tasks.loop(minutes=30)
+async def birthday_role_sync_loop():
+    await ensure_birthday_role_visible()
+    await sync_birthday_roles()
+
+
 @bot.event
 async def on_ready():
     global startup_notice_sent
@@ -2433,6 +2703,9 @@ async def on_ready():
     await ensure_ticket_panel()
     await ensure_verified_role_media_access()
     await sync_verified_bonus_roles()
+    await ensure_birthday_role_visible()
+    await sync_birthday_roles()
+    await sync_permission_roles_for_all_guilds()
     
     # Cache all server invites
     for guild in bot.guilds:
@@ -2444,6 +2717,9 @@ async def on_ready():
 
     if not reset_daily_messages_loop.is_running():
         reset_daily_messages_loop.start()
+
+    if not birthday_role_sync_loop.is_running():
+        birthday_role_sync_loop.start()
 
     if not startup_notice_sent:
         startup_notice_sent = True
@@ -2463,6 +2739,7 @@ async def on_member_join(member):
     guild = member.guild
 
     await ensure_verified_bonus_role(member)
+    await sync_permission_roles_for_member(member)
 
     # ===== INVITE TRACKING =====
     try:
@@ -2500,6 +2777,7 @@ async def on_member_update(before, after):
         return
 
     await ensure_verified_bonus_role(after)
+    await sync_permission_roles_for_member(after)
 
 
 # ===== TEMP VC SYSTEM =====
@@ -4829,6 +5107,15 @@ Create 'Temporary Channels' for temp VCs
         inline=False
     )
 
+    embed.add_field(
+        name="4ï¸âƒ£ Configure Permission Role Automation",
+        value=(
+            "Use `.setup permrole add <source role> <target role>` to auto-assign hidden permission roles.\n"
+            "Example: `.setup permrole add @Virelya @OS`"
+        ),
+        inline=False
+    )
+
     embed.set_footer(text="All set! Enjoy SBot")
     await ctx.send(embed=embed)
 
@@ -4890,6 +5177,101 @@ async def setup_role_show_command(ctx):
 @setup_role_command.error
 @setup_role_remove_command.error
 async def setup_role_error(ctx, error):
+    await automation_command_error(ctx, error)
+
+
+@setup_command.group(name="permrole", invoke_without_command=True)
+@commands.has_permissions(administrator=True)
+async def setup_permrole_command(ctx):
+    await ctx.send(embed=build_automation_embed(
+        ctx,
+        "Permission Role Automation",
+        (
+            "Use `.setup permrole add <source role> <target role>` to create a link.\n"
+            "Use `.setup permrole remove <source role> <target role>` to delete a link.\n"
+            "Use `.setup permrole list` to view all links.\n"
+            "Use `.setup permrole sync` to force a resync now."
+        ),
+    ))
+
+
+@setup_permrole_command.command(name="add")
+@commands.has_permissions(administrator=True)
+async def setup_permrole_add_command(ctx, source_role: discord.Role, target_role: discord.Role):
+    if source_role.id == target_role.id:
+        await ctx.send(embed=build_automation_embed(
+            ctx,
+            "Permission Role Automation",
+            "Source role and target role cannot be the same.",
+            success=False,
+        ))
+        return
+
+    await add_permission_role_link(ctx.guild.id, source_role.id, target_role.id)
+    await sync_permission_roles_for_guild(ctx.guild)
+    await ctx.send(embed=build_automation_embed(
+        ctx,
+        "Permission Role Automation",
+        f"Linked {source_role.mention} -> {target_role.mention}. Members with the source role will now get the target role automatically.",
+    ))
+
+
+@setup_permrole_command.command(name="remove")
+@commands.has_permissions(administrator=True)
+async def setup_permrole_remove_command(ctx, source_role: discord.Role, target_role: discord.Role):
+    await remove_permission_role_link(ctx.guild.id, source_role.id, target_role.id)
+    await sync_permission_roles_for_guild(ctx.guild)
+    await ctx.send(embed=build_automation_embed(
+        ctx,
+        "Permission Role Automation",
+        f"Removed link {source_role.mention} -> {target_role.mention}.",
+    ))
+
+
+@setup_permrole_command.command(name="list")
+@commands.has_permissions(administrator=True)
+async def setup_permrole_list_command(ctx):
+    links = await get_permission_role_links(ctx.guild.id)
+    if not links:
+        await ctx.send(embed=build_automation_embed(
+            ctx,
+            "Permission Role Automation",
+            "No permission role links are configured yet.",
+        ))
+        return
+
+    lines = []
+    for row in links:
+        source_role = ctx.guild.get_role(row["source_role_id"])
+        target_role = ctx.guild.get_role(row["target_role_id"])
+        source_text = source_role.mention if source_role else f"Deleted Role ({row['source_role_id']})"
+        target_text = target_role.mention if target_role else f"Deleted Role ({row['target_role_id']})"
+        lines.append(f"{source_text} -> {target_text}")
+
+    await ctx.send(embed=build_automation_embed(
+        ctx,
+        "Permission Role Automation",
+        "\n".join(lines),
+    ))
+
+
+@setup_permrole_command.command(name="sync")
+@commands.has_permissions(administrator=True)
+async def setup_permrole_sync_command(ctx):
+    await sync_permission_roles_for_guild(ctx.guild)
+    await ctx.send(embed=build_automation_embed(
+        ctx,
+        "Permission Role Automation",
+        "Permission role links synced for this server.",
+    ))
+
+
+@setup_permrole_command.error
+@setup_permrole_add_command.error
+@setup_permrole_remove_command.error
+@setup_permrole_list_command.error
+@setup_permrole_sync_command.error
+async def setup_permrole_error(ctx, error):
     await automation_command_error(ctx, error)
 
 
