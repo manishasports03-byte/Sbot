@@ -2968,6 +2968,20 @@ async def on_member_join(member):
     await ensure_verified_bonus_role(member)
     await sync_permission_roles_for_member(member)
 
+    verification_channel = guild.get_channel(SECURITY_VERIFICATION_CHANNEL_ID)
+    if verification_channel is not None:
+        try:
+            prompt_message = await verification_channel.send(
+                f"{member.mention} verify here",
+                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+            )
+            await asyncio.sleep(3)
+            await prompt_message.delete()
+        except discord.Forbidden:
+            print(f"Missing permissions to send verification prompt in {guild.name}")
+        except discord.HTTPException:
+            print(f"Failed to send verification prompt in {guild.name}")
+
     # ===== INVITE TRACKING =====
     try:
         # Get current invites
