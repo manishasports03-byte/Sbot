@@ -96,6 +96,9 @@ BLOCKED_WIZARDS_CATEGORY_IDS = {
     1391451602178801766,
     1379076786226462772,
 }
+WIZARDS_SEND_CATEGORY_IDS = {
+    1379095007503323156,
+}
 BIRTHDAY_ROLE_ID = 1380464856016097341
 VIRELYA_ROLE_ID = 1499783835594788894
 SEARASTA_ROLE_ID = 1499785700533473290
@@ -2117,10 +2120,18 @@ async def apply_membership_channel_access(guild):
             channel.id not in BLOCKED_WIZARDS_CATEGORY_IDS
             and channel_category_id not in BLOCKED_WIZARDS_CATEGORY_IDS
         )
+        wizard_can_send = (
+            channel.id in WIZARDS_SEND_CATEGORY_IDS
+            or channel_category_id in WIZARDS_SEND_CATEGORY_IDS
+        )
 
         try:
             await channel.set_permissions(unverified_role, view_channel=False)
-            await channel.set_permissions(wizards_role, view_channel=wizard_can_view)
+            await channel.set_permissions(
+                wizards_role,
+                view_channel=wizard_can_view,
+                send_messages=True if wizard_can_send else None,
+            )
         except discord.Forbidden:
             print(f"Missing permissions to update membership access for {channel} in {guild.name}")
         except discord.HTTPException:
