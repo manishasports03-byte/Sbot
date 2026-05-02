@@ -1615,6 +1615,17 @@ def has_ticket_staff_access(member):
     return any(role.id == TICKET_HELPER_ROLE_ID for role in member.roles)
 
 
+def member_has_role_id(member, role_id):
+    return any(role.id == role_id for role in member.roles)
+
+
+def can_use_command_role(member, *role_ids):
+    if member.guild.owner_id == member.id:
+        return True
+
+    return any(member_has_role_id(member, role_id) for role_id in role_ids)
+
+
 def build_ticket_panel_embed():
     return build_ticket_embed(
         TICKET_PANEL_TITLE,
@@ -3793,9 +3804,12 @@ async def gend_error(ctx, error):
 # ===== MODERATION COMMANDS =====
 
 @bot.command(name="warn")
-@commands.has_permissions(moderate_members=True)
 async def warn_command(ctx, member: MemberOrID, *, reason="No reason provided"):
     """Warn a member"""
+    if not can_use_command_role(ctx.author, MUTE_ROLE_ID, OS_ROLE_ID):
+        await ctx.send(embed=build_moderation_embed(ctx, "Warning Failed", "You do not have the required role to use this command.", success=False))
+        return
+
     if member == ctx.author:
         await ctx.send(embed=build_moderation_embed(ctx, "Warning Failed", "You cannot warn yourself.", success=False))
         return
@@ -3824,9 +3838,12 @@ async def warn_command(ctx, member: MemberOrID, *, reason="No reason provided"):
 
 
 @bot.command(name="mute")
-@commands.has_permissions(moderate_members=True)
 async def mute_command(ctx, member: MemberOrID, duration: str = "10m", *, reason="No reason provided"):
     """Mute a member (duration: 1m, 1h, 1d, etc.)"""
+    if not can_use_command_role(ctx.author, MUTE_ROLE_ID, OS_ROLE_ID):
+        await ctx.send(embed=build_moderation_embed(ctx, "Mute Failed", "You do not have the required role to use this command.", success=False))
+        return
+
     await mute_member(ctx, member, duration, reason)
 
 
@@ -3858,9 +3875,12 @@ async def mute_member(ctx, member: discord.Member, duration: str = "10m", reason
 
 
 @bot.command(name="unmute")
-@commands.has_permissions(moderate_members=True)
 async def unmute_command(ctx, *, target: str):
     """Unmute a member or everyone currently timed out"""
+    if not can_use_command_role(ctx.author, MUTE_ROLE_ID, OS_ROLE_ID):
+        await ctx.send(embed=build_moderation_embed(ctx, "Unmute Failed", "You do not have the required role to use this command.", success=False))
+        return
+
     if target.lower() == "all":
         timed_out_members = [member for member in ctx.guild.members if member.is_timed_out()]
         if not timed_out_members:
@@ -3906,9 +3926,12 @@ async def unmute_command_error(ctx, error):
 
 
 @bot.command(name="kick")
-@commands.has_permissions(kick_members=True)
 async def kick_command(ctx, member: MemberOrID, *, reason="No reason provided"):
     """Kick a member from the server"""
+    if not can_use_command_role(ctx.author, KICK_ROLE_ID, OS_ROLE_ID):
+        await ctx.send(embed=build_moderation_embed(ctx, "Kick Failed", "You do not have the required role to use this command.", success=False))
+        return
+
     if member == ctx.author:
         await ctx.send(embed=build_moderation_embed(ctx, "Kick Failed", "You cannot kick yourself.", success=False))
         return
@@ -3928,9 +3951,12 @@ async def kick_command(ctx, member: MemberOrID, *, reason="No reason provided"):
 
 
 @bot.command(name="ban")
-@commands.has_permissions(ban_members=True)
 async def ban_command(ctx, member: MemberOrID, *, reason="No reason provided"):
     """Ban a member from the server"""
+    if not can_use_command_role(ctx.author, BAN_ROLE_ID, OS_ROLE_ID):
+        await ctx.send(embed=build_moderation_embed(ctx, "Ban Failed", "You do not have the required role to use this command.", success=False))
+        return
+
     if member == ctx.author:
         await ctx.send(embed=build_moderation_embed(ctx, "Ban Failed", "You cannot ban yourself.", success=False))
         return
