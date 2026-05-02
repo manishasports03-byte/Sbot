@@ -2111,20 +2111,6 @@ async def sync_membership_roles_for_all_guilds():
             await sync_membership_roles_for_member(member)
 
 
-async def send_join_visibility_pings(member):
-    for channel in member.guild.text_channels:
-        permissions = channel.permissions_for(member.guild.me)
-        if not permissions.view_channel or not permissions.send_messages:
-            continue
-
-        try:
-            await channel.send(".", delete_after=2)
-        except discord.Forbidden:
-            continue
-        except discord.HTTPException:
-            continue
-
-
 async def apply_membership_channel_access(guild):
     wizards_role = guild.get_role(WIZARDS_ROLE_ID)
     unverified_role = guild.get_role(UNVERIFIED_ROLE_ID)
@@ -3094,7 +3080,6 @@ async def on_member_join(member):
     await sync_membership_roles_for_member(member)
     await ensure_verified_bonus_role(member)
     await sync_permission_roles_for_member(member)
-    await send_join_visibility_pings(member)
 
     verification_channel = guild.get_channel(SECURITY_VERIFICATION_CHANNEL_ID)
     if verification_channel is not None:
