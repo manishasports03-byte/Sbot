@@ -303,6 +303,16 @@ async def create_tables():
         )
     """)
     await db_execute("""
+        CREATE TABLE IF NOT EXISTS invite_events (
+            id BIGSERIAL PRIMARY KEY,
+            guild_id BIGINT,
+            user_id BIGINT,
+            inviter_id BIGINT,
+            event_type TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    await db_execute("""
         CREATE TABLE IF NOT EXISTS message_stats (
             guild_id BIGINT,
             user_id BIGINT,
@@ -470,6 +480,62 @@ async def get_invited_users(guild_id, inviter_id):
         inviter_id,
     )
     return [row["user_id"] for row in rows]
+
+
+async def log_invite_event(guild_id, user_id, inviter_id, event_type):
+    await db_execute(
+        """
+        INSERT INTO invite_events (guild_id, user_id, inviter_id, event_type)
+        VALUES ($1, $2, $3, $4)
+        """,
+        guild_id,
+        user_id,
+        inviter_id,
+        event_type,
+        log_context=f"Logged invite event {event_type} for user: {user_id}",
+    )
+
+
+async def get_invite_event_count(guild_id, inviter_id, event_type, since=None):
+    if since is None:
+        return await db_fetchval(
+            """
+            SELECT COUNT(*)
+            FROM invite_events
+            WHERE guild_id = $1 AND inviter_id = $2 AND event_type = $3
+            """,
+            guild_id,
+            inviter_id,
+            event_type,
+            log_fetch=False,
+        ) or 0
+
+    return await db_fetchval(
+        """
+        SELECT COUNT(*)
+        FROM invite_events
+        WHERE guild_id = $1 AND inviter_id = $2 AND event_type = $3 AND created_at >= $4
+        """,
+        guild_id,
+        inviter_id,
+        event_type,
+        since,
+        log_fetch=False,
+    ) or 0
+
+
+async def get_user_invite_event_count(guild_id, user_id, event_type):
+    return await db_fetchval(
+        """
+        SELECT COUNT(*)
+        FROM invite_events
+        WHERE guild_id = $1 AND user_id = $2 AND event_type = $3
+        """,
+        guild_id,
+        user_id,
+        event_type,
+        log_fetch=False,
+    ) or 0
 
 
 async def get_leaderboard(guild_id, limit=10):
@@ -2544,12 +2610,13 @@ def format_invite_request_timestamp():
 
 async def get_invite_ui_stats(guild_id, user_id):
     invites_count = await get_invites(guild_id, user_id)
+    rejoins_since = datetime.now(timezone.utc) - timedelta(days=7)
     return {
         "invites": invites_count,
-        "joins": invites_count,
-        "leaves": 0,
-        "fake": 0,
-        "rejoins": 0,
+        "joins": await get_invite_event_count(guild_id, user_id, "join"),
+        "leaves": await get_invite_event_count(guild_id, user_id, "leave"),
+        "fake": await get_invite_event_count(guild_id, user_id, "fake"),
+        "rejoins": await get_invite_event_count(guild_id, user_id, "rejoin", since=rejoins_since),
     }
 
 
@@ -2865,15 +2932,40 @@ async def on_member_join(member):
         if used_invite and used_invite.inviter:
             # Update inviter stats
             inviter_id = used_invite.inviter.id
+            prior_joins_for_member = await get_user_invite_event_count(guild.id, member.id, "join")
             
             # Update database
             await add_invites(guild.id, inviter_id, 1)
             await set_inviter(guild.id, member.id, inviter_id)
+            await log_invite_event(guild.id, member.id, inviter_id, "join")
+
+            if prior_joins_for_member > 0:
+                await log_invite_event(guild.id, member.id, inviter_id, "rejoin")
             
     except discord.Forbidden:
         pass
     except Exception as e:
         print(f"Error tracking invite for {member}: {e}")
+
+
+@bot.event
+async def on_member_remove(member):
+    if member.bot or not member.guild:
+        return
+
+    inviter_id = await get_inviter(member.guild.id, member.id)
+    if not inviter_id:
+        return
+
+    try:
+        await log_invite_event(member.guild.id, member.id, inviter_id, "leave")
+
+        if member.joined_at is not None:
+            time_in_server = datetime.now(timezone.utc) - member.joined_at
+            if time_in_server <= timedelta(days=1):
+                await log_invite_event(member.guild.id, member.id, inviter_id, "fake")
+    except Exception as e:
+        print(f"Error tracking leave invite stats for {member}: {e}")
 
 
 @bot.event
