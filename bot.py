@@ -2058,6 +2058,7 @@ async def sync_membership_roles_for_all_guilds():
 async def apply_membership_channel_access(guild):
     wizards_role = guild.get_role(WIZARDS_ROLE_ID)
     unverified_role = guild.get_role(UNVERIFIED_ROLE_ID)
+    os_role = guild.get_role(OS_ROLE_ID)
     if wizards_role is None or unverified_role is None:
         return
 
@@ -2084,18 +2085,24 @@ async def apply_membership_channel_access(guild):
         if channel is None:
             continue
 
-        allow_send = channel.id == CHANT_TO_START_CHANNEL_ID
         try:
             await channel.set_permissions(
                 unverified_role,
                 view_channel=True,
-                send_messages=allow_send,
+                send_messages=False,
                 read_message_history=True,
             )
             await channel.set_permissions(
                 wizards_role,
                 view_channel=False,
             )
+            if channel.id == CHANT_TO_START_CHANNEL_ID and os_role is not None:
+                await channel.set_permissions(
+                    os_role,
+                    view_channel=True,
+                    send_messages=True,
+                    read_message_history=True,
+                )
         except discord.Forbidden:
             print(f"Missing permissions to update onboarding channel access in {guild.name}")
         except discord.HTTPException:
