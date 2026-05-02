@@ -3190,7 +3190,7 @@ async def on_voice_state_update(member, before, after):
                 del temp_vc_users[member.id]
 
     # ===== VC ROLE ASSIGNMENT =====
-    vc_role_id = 1494308340619284490
+    vc_role_id = 1500036744970764330
     vc_role = guild.get_role(vc_role_id)
 
     if not vc_role:
