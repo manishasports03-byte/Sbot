@@ -1470,106 +1470,6 @@ def format_afk_pings(pings):
     return "\n".join(lines)
 
 
-# ===== TICKET SYSTEM VIEWS =====
-
-class TicketCreateView(discord.ui.View):
-    """View to create new tickets"""
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.green, emoji="🎫")
-    async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        
-        # Check for existing ticket by this user
-        for channel_id, ticket_info in tickets.items():
-            if ticket_info["creator"] == interaction.user.id:
-                channel = bot.get_channel(channel_id)
-                if channel:
-                    await interaction.followup.send(
-                        f"You already have an open ticket: {channel.mention}",
-                        ephemeral=True
-                    )
-                    return
-
-        # Create ticket channel
-        guild = interaction.guild
-        category = discord.utils.get(guild.categories, name=TICKET_CATEGORY_NAME)
-        
-        if not category:
-            category = await guild.create_category(TICKET_CATEGORY_NAME)
-
-        channel_name = f"ticket-{interaction.user.name}-{interaction.user.id % 10000}"
-        ticket_channel = await guild.create_text_channel(
-            channel_name,
-            category=category,
-            reason=f"Ticket created by {interaction.user}"
-        )
-
-        # Set permissions
-        await ticket_channel.set_permissions(
-            interaction.user,
-            read_messages=True,
-            send_messages=True
-        )
-        await ticket_channel.set_permissions(
-            guild.default_role,
-            read_messages=False
-        )
-
-        # Store ticket info
-        tickets[ticket_channel.id] = {
-            "creator": interaction.user.id,
-            "created_at": datetime.now(timezone.utc)
-        }
-
-        # Send ticket message
-        embed = discord.Embed(
-            title="Support Ticket Created",
-            description=f"Thank you for creating a ticket, {interaction.user.mention}!\n\nOur support team will help you shortly.",
-            color=discord.Color.green()
-        )
-        embed.set_footer(text="Click Close to close this ticket")
-
-        await ticket_channel.send(
-            embed=embed,
-            view=TicketCloseView()
-        )
-
-        await interaction.followup.send(
-            f"✅ Ticket created: {ticket_channel.mention}",
-            ephemeral=True
-        )
-
-
-class TicketCloseView(discord.ui.View):
-    """View to close tickets"""
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Close", style=discord.ButtonStyle.red, emoji="❌")
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.channel_id not in tickets:
-            await interaction.response.send_message("This is not a valid ticket.", ephemeral=True)
-            return
-
-        ticket_info = tickets[interaction.channel_id]
-        creator = interaction.guild.get_member(ticket_info["creator"])
-
-        embed = discord.Embed(
-            title="Ticket Closed",
-            description=f"This ticket has been closed by {interaction.user.mention}",
-            color=discord.Color.red()
-        )
-
-        await interaction.response.send_message(embed=embed)
-        
-        # Delete after 5 seconds
-        await asyncio.sleep(5)
-        await interaction.channel.delete(reason=f"Ticket closed by {interaction.user}")
-        tickets.pop(interaction.channel_id, None)
-
-
 def build_ticket_embed(title, description, footer=None):
     embed = discord.Embed(
         title=title,
@@ -2042,26 +1942,6 @@ async def send_restart_notice():
         return False
 
 
-async def ensure_verified_role_media_access():
-    for guild in bot.guilds:
-        channel = guild.get_channel(MEDIA_ONLY_CHANNEL_ID)
-        role = guild.get_role(VERIFIED_ROLE_ID)
-        if channel is None or role is None:
-            continue
-
-        try:
-            await channel.set_permissions(
-                role,
-                send_messages=True,
-                view_channel=True,
-                read_message_history=True,
-            )
-        except discord.Forbidden:
-            print(f"Missing permissions to update media access in {guild.name}")
-        except discord.HTTPException:
-            print(f"Failed to update media access in {guild.name}")
-
-
 async def sync_membership_roles_for_member(member):
     if member.bot:
         return
@@ -2109,133 +1989,6 @@ async def sync_membership_roles_for_all_guilds():
     for guild in bot.guilds:
         for member in guild.members:
             await sync_membership_roles_for_member(member)
-
-
-async def apply_membership_channel_access(guild):
-    wizards_role = guild.get_role(WIZARDS_ROLE_ID)
-    unverified_role = guild.get_role(UNVERIFIED_ROLE_ID)
-    os_role = guild.get_role(OS_ROLE_ID)
-    voice_role = guild.get_role(VOICE_ROLE_ID)
-    special_voice_role = guild.get_role(SPECIAL_WIZARDS_VOICE_ACCESS_ROLE_ID)
-    if wizards_role is None or unverified_role is None:
-        return
-
-    onboarding_category = guild.get_channel(ONBOARDING_CATEGORY_ID)
-    if isinstance(onboarding_category, discord.CategoryChannel):
-        try:
-            await onboarding_category.set_permissions(
-                unverified_role,
-                view_channel=True,
-                send_messages=False,
-                read_message_history=True,
-            )
-            await onboarding_category.set_permissions(
-                wizards_role,
-                view_channel=False,
-            )
-        except discord.Forbidden:
-            print(f"Missing permissions to update onboarding category access in {guild.name}")
-        except discord.HTTPException:
-            print(f"Failed to update onboarding category access in {guild.name}")
-
-    for channel_id in (CHANT_TO_START_CHANNEL_ID, SECURITY_VERIFICATION_CHANNEL_ID):
-        channel = guild.get_channel(channel_id)
-        if channel is None:
-            continue
-
-        try:
-            await channel.set_permissions(
-                unverified_role,
-                view_channel=True,
-                send_messages=False,
-                read_message_history=True,
-            )
-            await channel.set_permissions(
-                wizards_role,
-                view_channel=channel.id == CHANT_TO_START_CHANNEL_ID,
-                send_messages=False if channel.id == CHANT_TO_START_CHANNEL_ID else None,
-            )
-            if channel.id == CHANT_TO_START_CHANNEL_ID and os_role is not None:
-                await channel.set_permissions(
-                    os_role,
-                    view_channel=True,
-                    send_messages=True,
-                    read_message_history=True,
-                )
-        except discord.Forbidden:
-            print(f"Missing permissions to update onboarding channel access in {guild.name}")
-        except discord.HTTPException:
-            print(f"Failed to update onboarding channel access in {guild.name}")
-
-    for channel in guild.channels:
-        if channel.id in {ONBOARDING_CATEGORY_ID, CHANT_TO_START_CHANNEL_ID, SECURITY_VERIFICATION_CHANNEL_ID}:
-            continue
-
-        channel_category_id = getattr(channel, "category_id", None)
-        wizard_can_view = (
-            channel.id not in BLOCKED_WIZARDS_CHANNEL_IDS
-            and
-            channel.id not in BLOCKED_WIZARDS_CATEGORY_IDS
-            and channel_category_id not in BLOCKED_WIZARDS_CATEGORY_IDS
-        )
-        if channel_category_id in WIZARDS_SEND_CATEGORY_IDS:
-            wizard_can_view = True
-        wizard_can_send = (
-            channel.id in WIZARDS_SEND_CATEGORY_IDS
-            or channel_category_id in WIZARDS_SEND_CATEGORY_IDS
-        )
-        is_voice_channel = isinstance(channel, (discord.VoiceChannel, discord.StageChannel))
-        if is_voice_channel and channel.id in WIZARDS_VIEW_ONLY_VOICE_CHANNEL_IDS:
-            wizard_can_view = True
-        wizard_can_connect = (
-            channel.id in WIZARDS_ALLOWED_VOICE_CHANNEL_IDS
-            or channel_category_id in WIZARDS_ALLOWED_VOICE_CATEGORY_IDS
-            or (
-                channel_category_id == WIZARDS_VOICE_CATEGORY_ID
-                and channel.id != RESTRICTED_WIZARDS_VOICE_CHANNEL_ID
-            )
-        )
-        if channel.id in WIZARDS_VIEW_ONLY_VOICE_CHANNEL_IDS:
-            wizard_can_connect = False
-        wizard_voice_muted = channel_category_id in WIZARDS_MUTED_VOICE_CATEGORY_IDS
-
-        try:
-            await channel.set_permissions(unverified_role, view_channel=False)
-            if is_voice_channel:
-                await channel.set_permissions(
-                    wizards_role,
-                    view_channel=wizard_can_view,
-                    connect=wizard_can_connect,
-                    speak=False if wizard_voice_muted else None,
-                )
-                if channel.id == RESTRICTED_WIZARDS_VOICE_CHANNEL_ID:
-                    if special_voice_role is not None:
-                        await channel.set_permissions(
-                            special_voice_role,
-                            view_channel=True,
-                            connect=True,
-                        )
-                    if voice_role is not None:
-                        await channel.set_permissions(
-                            voice_role,
-                            view_channel=True,
-                            connect=True,
-                        )
-            else:
-                await channel.set_permissions(
-                    wizards_role,
-                    view_channel=wizard_can_view,
-                    send_messages=True if wizard_can_send else None,
-                )
-        except discord.Forbidden:
-            print(f"Missing permissions to update membership access for {channel} in {guild.name}")
-        except discord.HTTPException:
-            print(f"Failed to update membership access for {channel} in {guild.name}")
-
-
-async def apply_membership_channel_access_for_all_guilds():
-    for guild in bot.guilds:
-        await apply_membership_channel_access(guild)
 
 
 async def ensure_verified_bonus_role(member):
@@ -3036,8 +2789,6 @@ async def on_ready():
     bot.add_view(TicketCloseView())
     bot.add_view(TicketStaffControlsView())
     await ensure_ticket_panel()
-    await ensure_verified_role_media_access()
-    await apply_membership_channel_access_for_all_guilds()
     await sync_membership_roles_for_all_guilds()
     await sync_verified_bonus_roles()
     await ensure_birthday_role_visible()
