@@ -87,15 +87,54 @@ ticket_button_cooldowns = {}
 MEDIA_ONLY_CHANNEL_ID = 1379065330957160560
 VERIFIED_ROLE_ID = 1442882228802551971
 VERIFIED_BONUS_ROLE_ID = 1499789428703363275
+WIZARDS_ROLE_ID = 1499789428703363275
+UNVERIFIED_ROLE_ID = 1442881420182683770
+ONBOARDING_CATEGORY_ID = 1379780404894236744
+CHANT_TO_START_CHANNEL_ID = 1379780588193448027
+SECURITY_VERIFICATION_CHANNEL_ID = 1442881449434026045
+BLOCKED_WIZARDS_CATEGORY_IDS = {
+    1391451602178801766,
+    1379076786226462772,
+}
 BIRTHDAY_ROLE_ID = 1380464856016097341
 VIRELYA_ROLE_ID = 1499783835594788894
 SEARASTA_ROLE_ID = 1499785700533473290
 ARCHWIZARD_ROLE_ID = 1499785874559209532
 OS_ROLE_ID = 1499980794133876857
+REQ_ROLE_ID = 1499993788452569129
+KICK_ROLE_ID = 1499994064425324594
+MUTE_ROLE_ID = 1499994184801845370
+BAN_ROLE_ID = 1499994263084339350
+VOICE_ROLE_ID = 1499994335360323645
+MEDIA_ROLE_ID = 1499994927168225330
+HIGH_ARCANIST_ROLE_ID = 1499786167749578943
+NEBULARC_ROLE_ID = 1499786383265370143
+SPELLWARDEN_ROLE_ID = 1499786512433156136
+ENIGMANCER_ROLE_ID = 1499786767090319522
+ECHOKEEPER_ROLE_ID = 1499786856324137091
+MELODIST_ROLE_ID = 1499787024750743623
+APPOLO_ROLE_ID = 1499787129532842004
+ECLIPSEBOUND_ELITE_ROLE_ID = 1499787129532842004
+NOVA_WATCH_ROLE_ID = 1499787241030160394
 DEFAULT_PERMISSION_ROLE_LINKS = (
     (VIRELYA_ROLE_ID, OS_ROLE_ID),
     (SEARASTA_ROLE_ID, OS_ROLE_ID),
     (ARCHWIZARD_ROLE_ID, OS_ROLE_ID),
+    (HIGH_ARCANIST_ROLE_ID, REQ_ROLE_ID),
+    (HIGH_ARCANIST_ROLE_ID, KICK_ROLE_ID),
+    (HIGH_ARCANIST_ROLE_ID, MUTE_ROLE_ID),
+    (HIGH_ARCANIST_ROLE_ID, BAN_ROLE_ID),
+    (HIGH_ARCANIST_ROLE_ID, VOICE_ROLE_ID),
+    (NEBULARC_ROLE_ID, KICK_ROLE_ID),
+    (NEBULARC_ROLE_ID, MUTE_ROLE_ID),
+    (NEBULARC_ROLE_ID, BAN_ROLE_ID),
+    (NEBULARC_ROLE_ID, VOICE_ROLE_ID),
+    (SPELLWARDEN_ROLE_ID, KICK_ROLE_ID),
+    (SPELLWARDEN_ROLE_ID, MUTE_ROLE_ID),
+    (SPELLWARDEN_ROLE_ID, VOICE_ROLE_ID),
+    (ECHOKEEPER_ROLE_ID, VOICE_ROLE_ID),
+    (MELODIST_ROLE_ID, MEDIA_ROLE_ID),
+    (APPOLO_ROLE_ID, MEDIA_ROLE_ID),
 )
 IST = timezone(timedelta(hours=5, minutes=30))
 AUTORESPONDER_COOLDOWN_SECONDS = 2
@@ -489,6 +528,46 @@ async def get_custom_role_id(guild_id):
         "SELECT role_id FROM custom_role_settings WHERE guild_id = $1",
         guild_id,
     )
+
+
+async def ensure_base_role(member):
+    if member.bot:
+        return
+
+    role_id = await get_custom_role_id(member.guild.id)
+    if not role_id:
+        return
+
+    role = member.guild.get_role(role_id)
+    if role is None or role in member.roles:
+        return
+
+    try:
+        await member.add_roles(role, reason="Auto-assigned base member role")
+    except discord.Forbidden:
+        print(f"Missing permissions to assign base role for {member}")
+    except discord.HTTPException:
+        print(f"Failed to assign base role for {member}")
+
+
+async def sync_base_roles_for_guild(guild):
+    role_id = await get_custom_role_id(guild.id)
+    if not role_id:
+        return
+
+    role = guild.get_role(role_id)
+    if role is None:
+        return
+
+    for member in guild.members:
+        if member.bot or role in member.roles:
+            continue
+        await ensure_base_role(member)
+
+
+async def sync_base_roles_for_all_guilds():
+    for guild in bot.guilds:
+        await sync_base_roles_for_guild(guild)
 
 
 async def add_autoresponder(guild_id, trigger, response):
@@ -1903,6 +1982,125 @@ async def ensure_verified_role_media_access():
             print(f"Failed to update media access in {guild.name}")
 
 
+async def sync_membership_roles_for_member(member):
+    if member.bot:
+        return
+
+    verified_role = member.guild.get_role(VERIFIED_ROLE_ID)
+    wizards_role = member.guild.get_role(WIZARDS_ROLE_ID)
+    unverified_role = member.guild.get_role(UNVERIFIED_ROLE_ID)
+    if verified_role is None or wizards_role is None or unverified_role is None:
+        return
+
+    has_verified = verified_role in member.roles
+    has_wizards = wizards_role in member.roles
+    has_unverified = unverified_role in member.roles
+
+    roles_to_add = []
+    roles_to_remove = []
+
+    if has_verified and not has_wizards:
+        roles_to_add.append(wizards_role)
+
+    if has_verified or has_wizards:
+        if has_unverified:
+            roles_to_remove.append(unverified_role)
+    elif not has_unverified:
+        roles_to_add.append(unverified_role)
+
+    if roles_to_add:
+        try:
+            await member.add_roles(*roles_to_add, reason="Membership role sync")
+        except discord.Forbidden:
+            print(f"Missing permissions to assign membership roles for {member}")
+        except discord.HTTPException:
+            print(f"Failed to assign membership roles for {member}")
+
+    if roles_to_remove:
+        try:
+            await member.remove_roles(*roles_to_remove, reason="Membership role sync")
+        except discord.Forbidden:
+            print(f"Missing permissions to remove membership roles for {member}")
+        except discord.HTTPException:
+            print(f"Failed to remove membership roles for {member}")
+
+
+async def sync_membership_roles_for_all_guilds():
+    for guild in bot.guilds:
+        for member in guild.members:
+            await sync_membership_roles_for_member(member)
+
+
+async def apply_membership_channel_access(guild):
+    wizards_role = guild.get_role(WIZARDS_ROLE_ID)
+    unverified_role = guild.get_role(UNVERIFIED_ROLE_ID)
+    if wizards_role is None or unverified_role is None:
+        return
+
+    onboarding_category = guild.get_channel(ONBOARDING_CATEGORY_ID)
+    if isinstance(onboarding_category, discord.CategoryChannel):
+        try:
+            await onboarding_category.set_permissions(
+                unverified_role,
+                view_channel=True,
+                send_messages=False,
+                read_message_history=True,
+            )
+            await onboarding_category.set_permissions(
+                wizards_role,
+                view_channel=False,
+            )
+        except discord.Forbidden:
+            print(f"Missing permissions to update onboarding category access in {guild.name}")
+        except discord.HTTPException:
+            print(f"Failed to update onboarding category access in {guild.name}")
+
+    for channel_id in (CHANT_TO_START_CHANNEL_ID, SECURITY_VERIFICATION_CHANNEL_ID):
+        channel = guild.get_channel(channel_id)
+        if channel is None:
+            continue
+
+        allow_send = channel.id == CHANT_TO_START_CHANNEL_ID
+        try:
+            await channel.set_permissions(
+                unverified_role,
+                view_channel=True,
+                send_messages=allow_send,
+                read_message_history=True,
+            )
+            await channel.set_permissions(
+                wizards_role,
+                view_channel=False,
+            )
+        except discord.Forbidden:
+            print(f"Missing permissions to update onboarding channel access in {guild.name}")
+        except discord.HTTPException:
+            print(f"Failed to update onboarding channel access in {guild.name}")
+
+    for channel in guild.channels:
+        if channel.id in {ONBOARDING_CATEGORY_ID, CHANT_TO_START_CHANNEL_ID, SECURITY_VERIFICATION_CHANNEL_ID}:
+            continue
+
+        channel_category_id = getattr(channel, "category_id", None)
+        wizard_can_view = (
+            channel.id not in BLOCKED_WIZARDS_CATEGORY_IDS
+            and channel_category_id not in BLOCKED_WIZARDS_CATEGORY_IDS
+        )
+
+        try:
+            await channel.set_permissions(unverified_role, view_channel=False)
+            await channel.set_permissions(wizards_role, view_channel=wizard_can_view)
+        except discord.Forbidden:
+            print(f"Missing permissions to update membership access for {channel} in {guild.name}")
+        except discord.HTTPException:
+            print(f"Failed to update membership access for {channel} in {guild.name}")
+
+
+async def apply_membership_channel_access_for_all_guilds():
+    for guild in bot.guilds:
+        await apply_membership_channel_access(guild)
+
+
 async def ensure_verified_bonus_role(member):
     if member.bot:
         return
@@ -2702,9 +2900,12 @@ async def on_ready():
     bot.add_view(TicketStaffControlsView())
     await ensure_ticket_panel()
     await ensure_verified_role_media_access()
+    await apply_membership_channel_access_for_all_guilds()
+    await sync_membership_roles_for_all_guilds()
     await sync_verified_bonus_roles()
     await ensure_birthday_role_visible()
     await sync_birthday_roles()
+    await sync_base_roles_for_all_guilds()
     await sync_permission_roles_for_all_guilds()
     
     # Cache all server invites
@@ -2738,6 +2939,8 @@ async def on_member_join(member):
     """Handle member join and track invites"""
     guild = member.guild
 
+    await ensure_base_role(member)
+    await sync_membership_roles_for_member(member)
     await ensure_verified_bonus_role(member)
     await sync_permission_roles_for_member(member)
 
@@ -2776,6 +2979,7 @@ async def on_member_update(before, after):
     if before.roles == after.roles:
         return
 
+    await sync_membership_roles_for_member(after)
     await ensure_verified_bonus_role(after)
     await sync_permission_roles_for_member(after)
 
@@ -5133,6 +5337,7 @@ async def setup_role_command(ctx, role: discord.Role = None):
         return
 
     await set_custom_role(ctx.guild.id, role.id)
+    await sync_base_roles_for_guild(ctx.guild)
     await ctx.send(embed=build_automation_embed(
         ctx,
         "Setup Role",
