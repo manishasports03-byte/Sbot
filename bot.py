@@ -12,23 +12,11 @@ import asyncio
 import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
-from core.app import AppContainer
-from core.config import load_settings
-from core.logging import configure_logging, get_logger
 
 load_dotenv()
-configure_logging(os.getenv("LOG_LEVEL", "INFO"))
 
 DEFAULT_PREFIX = "."
 BOT_START_TIME = datetime.now(timezone.utc)
-MODULAR_DIFF_HISTORY_LIMIT = 25
-
-
-def env_flag(name, default=False):
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def get_command_prefix(bot_instance, message):
@@ -42,302 +30,6 @@ intents.voice_states = True
 intents.members = True
 
 bot = commands.Bot(command_prefix=get_command_prefix, intents=intents, help_command=None)
-modular_logger = get_logger("sbot.modular")
-MODULAR_HANDLERS_ENABLED = env_flag("MODULAR_HANDLERS_ENABLED", False)
-MODULAR_SHADOW_MODE = env_flag("MODULAR_SHADOW_MODE", False)
-modular_container = None
-modular_runtime_error = None
-modular_diff_history = []
-modular_stats = {
-    "matches": defaultdict(int),
-    "diffs": defaultdict(int),
-    "noops": defaultdict(int),
-    "clean_passes": defaultdict(int),
-}
-last_modular_clean_pass_at = None
-
-
-def append_modular_diff(entry):
-    modular_diff_history.append(entry)
-    if len(modular_diff_history) > MODULAR_DIFF_HISTORY_LIMIT:
-        del modular_diff_history[0]
-
-
-def snapshot_role_ids(member):
-    return {role.id for role in member.roles}
-
-
-def log_modular_event(event_name, **fields):
-    modular_logger.info(event_name, extra=fields)
-
-
-def note_modular_match(scope, noop=False):
-    global last_modular_clean_pass_at
-    modular_stats["matches"][scope] += 1
-    modular_stats["clean_passes"][scope] += 1
-    if noop:
-        modular_stats["noops"][scope] += 1
-        log_modular_event("modular.shadow.clean_state", scope=scope)
-    last_modular_clean_pass_at = datetime.now(timezone.utc).isoformat()
-
-
-def record_modular_diff(scope, target_id, expected, actual):
-    modular_stats["diffs"][scope] += 1
-    severity = "critical" if scope.startswith("ticket") or scope == "guild_access" else "minor"
-    entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "scope": scope,
-        "target_id": target_id,
-        "severity": severity,
-        "expected": expected,
-        "actual": actual,
-    }
-    append_modular_diff(entry)
-    log_modular_event("modular.diff", scope=scope, target_id=target_id, severity=severity, expected=expected, actual=actual)
-
-
-def normalize_role_ids(role_ids):
-    return sorted(int(role_id) for role_id in role_ids)
-
-
-def normalize_permission_overwrite(overwrite):
-    if isinstance(overwrite, discord.PermissionOverwrite):
-        allow, deny = overwrite.pair()
-        return {
-            "allow": allow.value,
-            "deny": deny.value,
-        }
-    return overwrite
-
-
-def normalize_overwrites_mapping(overwrites):
-    normalized = {}
-    for target, overwrite in overwrites.items():
-        target_id = getattr(target, "id", target)
-        normalized[int(target_id)] = normalize_permission_overwrite(overwrite)
-    return {target_id: normalized[target_id] for target_id in sorted(normalized)}
-
-
-def snapshot_ticket_channel_state(channel):
-    if channel is None:
-        return {"deleted": True}
-    return {
-        "deleted": False,
-        "channel_id": channel.id,
-        "category_id": channel.category_id,
-        "name": channel.name,
-        "topic": channel.topic,
-        "owner_id": get_ticket_owner_id(channel),
-        "overwrites": normalize_overwrites_mapping(channel.overwrites),
-    }
-
-
-async def ensure_modular_runtime():
-    global modular_container, modular_runtime_error
-    if not (MODULAR_HANDLERS_ENABLED or MODULAR_SHADOW_MODE):
-        return None
-    if modular_container is not None:
-        return modular_container
-
-    try:
-        settings = load_settings()
-        modular_container = AppContainer(settings)
-        await modular_container.startup()
-        modular_runtime_error = None
-        log_modular_event(
-            "modular.runtime.started",
-            handlers_enabled=MODULAR_HANDLERS_ENABLED,
-            shadow_mode=MODULAR_SHADOW_MODE,
-        )
-        return modular_container
-    except Exception as exc:
-        modular_runtime_error = str(exc)
-        log_modular_event(
-            "modular.runtime.failed",
-            handlers_enabled=MODULAR_HANDLERS_ENABLED,
-            shadow_mode=MODULAR_SHADOW_MODE,
-            error=modular_runtime_error,
-        )
-        return None
-
-
-async def get_modular_member_plan(member, scope):
-    container = await ensure_modular_runtime()
-    if container is None:
-        return None
-    plan = await container.access_runtime.plan_member_sync(member)
-    log_modular_event(
-        "modular.shadow.plan",
-        scope=scope,
-        member_id=member.id,
-        add=plan["combined"]["add"],
-        remove=plan["combined"]["remove"],
-    )
-    return plan
-
-
-def compare_member_plan(scope, member, before_role_ids, plan):
-    if plan is None:
-        return
-
-    current_role_ids = snapshot_role_ids(member)
-    actual = {
-        "add": normalize_role_ids(current_role_ids - before_role_ids),
-        "remove": normalize_role_ids(before_role_ids - current_role_ids),
-    }
-    expected = {
-        "add": normalize_role_ids(plan["combined"]["add"]),
-        "remove": normalize_role_ids(plan["combined"]["remove"]),
-    }
-    if expected != actual:
-        record_modular_diff(scope, member.id, expected, actual)
-    else:
-        note_modular_match(scope, noop=not expected["add"] and not expected["remove"])
-        log_modular_event("modular.shadow.match", scope=scope, member_id=member.id, expected=expected)
-
-
-async def shadow_compare_guild_access(guild):
-    container = await ensure_modular_runtime()
-    if container is None:
-        return
-
-    diffs = await container.access_runtime.diff_guild_access(guild)
-    if not diffs:
-        note_modular_match("guild_access", noop=True)
-        log_modular_event("modular.shadow.access.match", guild_id=guild.id)
-        return
-
-    for diff in diffs[:10]:
-        record_modular_diff("guild_access", diff.get("channel_id", guild.id), diff.get("expected"), diff.get("actual"))
-    log_modular_event("modular.shadow.access.diff_count", guild_id=guild.id, diff_count=len(diffs))
-
-
-async def apply_modular_guild_access(guild, dry_run=False):
-    container = await ensure_modular_runtime()
-    if container is None:
-        return
-
-    plans = await container.access_runtime.plan_guild_access(guild)
-    if dry_run:
-        log_modular_event("modular.shadow.guild_access.plan", guild_id=guild.id, channel_count=len(plans))
-        return
-
-    for channel_id, role_overwrites in plans.items():
-        channel = guild.get_channel(channel_id)
-        if channel is None:
-            continue
-        for role_id, overwrite in role_overwrites.items():
-            role = guild.get_role(role_id)
-            if role is None:
-                continue
-            await channel.set_permissions(role, overwrite=overwrite)
-
-
-async def run_modular_join_flow(member, dry_run=False):
-    container = await ensure_modular_runtime()
-    if container is None:
-        return None
-
-    plan = await container.access_runtime.apply_member_sync(member, dry_run=dry_run)
-    if dry_run:
-        log_modular_event("modular.shadow.member_join.plan", member_id=member.id, plan=plan["combined"])
-        return plan
-
-    payloads = await container.memberships.build_join_visibility_pings(member.guild)
-    for payload in payloads:
-        channel = member.guild.get_channel(payload["channel_id"])
-        if channel is None:
-            continue
-        await channel.send(payload["content"], delete_after=payload["delete_after_seconds"])
-
-    prompt = await container.memberships.build_join_prompt(member)
-    prompt_channel = member.guild.get_channel(prompt["channel_id"]) if prompt["channel_id"] else None
-    if prompt_channel is not None:
-        prompt_message = await prompt_channel.send(
-            prompt["content"],
-            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
-        )
-        await asyncio.sleep(int(prompt["delete_after_seconds"]))
-        await prompt_message.delete()
-
-    return plan
-
-
-async def run_modular_update_flow(member, dry_run=False):
-    container = await ensure_modular_runtime()
-    if container is None:
-        return None
-    plan = await container.access_runtime.apply_member_sync(member, dry_run=dry_run)
-    if dry_run:
-        log_modular_event("modular.shadow.member_update.plan", member_id=member.id, plan=plan["combined"])
-    return plan
-
-
-async def build_modular_ticket_shadow_plan(guild, user, category_id):
-    container = await ensure_modular_runtime()
-    if container is None:
-        return None
-
-    existing_channel = await container.tickets.find_existing_ticket_channel(guild, user.id)
-    if existing_channel is not None:
-        return {
-            "existing_channel_id": existing_channel.id,
-            "category_id": existing_channel.category_id,
-        }
-
-    overwrites = await container.tickets.build_ticket_overwrites(guild, user)
-    overwrites[guild.default_role] = discord.PermissionOverwrite(
-        view_channel=False,
-        send_messages=False,
-        read_message_history=False,
-    )
-    return {
-        "existing_channel_id": None,
-        "category_id": category_id,
-        "channel_name": container.tickets.ticket_channel_name_for(user),
-        "topic": f"ticket_owner_id:{user.id}",
-        "overwrites": normalize_overwrites_mapping(overwrites),
-    }
-
-
-def compare_modular_ticket_plan(user_id, plan, actual):
-    if plan is None:
-        return
-    if plan != actual:
-        record_modular_diff("ticket_create", user_id, plan, actual)
-    else:
-        note_modular_match("ticket_create", noop=bool(plan.get("existing_channel_id")))
-        log_modular_event("modular.shadow.ticket.match", user_id=user_id, actual=actual)
-
-
-def build_expected_ticket_state_from_channel(channel, owner_id, *, closed=None, reopened=None):
-    expected = snapshot_ticket_channel_state(channel)
-    target = channel.guild.get_member(owner_id) or discord.Object(id=owner_id)
-
-    overwrites = dict(channel.overwrites)
-    if closed:
-        overwrites[target] = discord.PermissionOverwrite(
-            view_channel=False,
-            send_messages=False,
-            read_message_history=False,
-        )
-    if reopened:
-        overwrites[target] = discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=True,
-            read_message_history=True,
-        )
-
-    expected["overwrites"] = normalize_overwrites_mapping(overwrites)
-    return expected
-
-
-def compare_modular_ticket_lifecycle(scope, target_id, expected, actual):
-    if expected != actual:
-        record_modular_diff(scope, target_id, expected, actual)
-    else:
-        note_modular_match(scope, noop=False)
-        log_modular_event("modular.shadow.ticket_lifecycle.match", scope=scope, target_id=target_id)
 
 # ===== CONFIG =====
 bad_words = ["mc", "bc", "madarchod", "bhosdike", "chutiya", "idiot", "stupid"]
@@ -368,7 +60,6 @@ NO_PREFIX_COMMANDS = {
     "warn", "mute", "unmute", "kick", "ban", "purge", "slowmode",
     "gstart", "gend", "greroll",
     "steal",
-    "debug",
 }
 
 # ===== ACTIVITY ROTATION =====
@@ -2024,21 +1715,8 @@ class TicketPanelView(discord.ui.View):
             await interaction.response.send_message("This can only be used in a server.", ephemeral=True)
             return
 
-        shadow_plan = None
-        if MODULAR_SHADOW_MODE:
-            shadow_plan = await build_modular_ticket_shadow_plan(interaction.guild, interaction.user, category_id)
-
         existing_channel = await find_existing_ticket_channel(interaction.guild, interaction.user.id)
         if existing_channel is not None:
-            if MODULAR_SHADOW_MODE:
-                compare_modular_ticket_plan(
-                    interaction.user.id,
-                    shadow_plan,
-                    {
-                        "existing_channel_id": existing_channel.id,
-                        "category_id": existing_channel.category_id,
-                    },
-                )
             await interaction.response.send_message(f"Ticket created: {existing_channel.mention}", ephemeral=True)
             return
 
@@ -2122,18 +1800,6 @@ class TicketPanelView(discord.ui.View):
             return
 
         ticket_button_cooldowns[interaction.user.id] = datetime.now(timezone.utc) + timedelta(seconds=TICKET_BUTTON_COOLDOWN_SECONDS)
-        if MODULAR_SHADOW_MODE:
-            compare_modular_ticket_plan(
-                interaction.user.id,
-                shadow_plan,
-                {
-                    "existing_channel_id": None,
-                    "category_id": ticket_channel.category_id,
-                    "channel_name": ticket_channel.name,
-                    "topic": ticket_channel.topic,
-                    "overwrites": normalize_overwrites_mapping(ticket_channel.overwrites),
-                },
-            )
         await interaction.edit_original_response(content=f"Ticket created: {ticket_channel.mention}")
 
     @discord.ui.button(label="Rewards", style=discord.ButtonStyle.success, emoji="✨", custom_id="ticket_rewards")
@@ -2165,14 +1831,6 @@ class TicketCloseConfirmView(discord.ui.View):
             await interaction.response.send_message("This is not a valid ticket.", ephemeral=True)
             return
 
-        shadow_expected = None
-        if MODULAR_SHADOW_MODE:
-            shadow_expected = build_expected_ticket_state_from_channel(
-                interaction.channel,
-                owner_id,
-                closed=True,
-            )
-
         member = interaction.guild.get_member(owner_id)
         target = member or discord.Object(id=owner_id)
 
@@ -2199,13 +1857,6 @@ class TicketCloseConfirmView(discord.ui.View):
             embed=build_ticket_embed("Support team ticket controls", ""),
             view=TicketStaffControlsView(owner_id)
         )
-        if MODULAR_SHADOW_MODE:
-            compare_modular_ticket_lifecycle(
-                "ticket_close",
-                interaction.channel.id,
-                shadow_expected,
-                snapshot_ticket_channel_state(interaction.channel),
-            )
         self.stop()
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="⚫")
@@ -2249,14 +1900,6 @@ class TicketStaffControlsView(discord.ui.View):
             await interaction.response.send_message("This is not a valid ticket.", ephemeral=True)
             return
 
-        shadow_expected = None
-        if MODULAR_SHADOW_MODE:
-            shadow_expected = build_expected_ticket_state_from_channel(
-                interaction.channel,
-                owner_id,
-                reopened=True,
-            )
-
         member = interaction.guild.get_member(owner_id)
         target = member or discord.Object(id=owner_id)
 
@@ -2275,37 +1918,12 @@ class TicketStaffControlsView(discord.ui.View):
             return
 
         await interaction.response.send_message("Ticket reopened")
-        if MODULAR_SHADOW_MODE:
-            compare_modular_ticket_lifecycle(
-                "ticket_reopen",
-                interaction.channel.id,
-                shadow_expected,
-                snapshot_ticket_channel_state(interaction.channel),
-            )
 
     @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger, emoji="🗑", custom_id="ticket_staff_delete")
     async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        shadow_expected = None
-        channel_id = interaction.channel.id
-        if MODULAR_SHADOW_MODE:
-            shadow_expected = {
-                "deleted": True,
-                "channel_id": channel_id,
-                "category_id": interaction.channel.category_id,
-                "name": interaction.channel.name,
-                "topic": interaction.channel.topic,
-                "owner_id": get_ticket_owner_id(interaction.channel),
-            }
         await interaction.response.send_message("Deleting ticket...", ephemeral=True)
         try:
             await interaction.channel.delete(reason=f"Ticket deleted by {interaction.user}")
-            if MODULAR_SHADOW_MODE:
-                compare_modular_ticket_lifecycle(
-                    "ticket_delete",
-                    channel_id,
-                    shadow_expected,
-                    {"deleted": True, "channel_id": channel_id},
-                )
         except discord.Forbidden:
             await interaction.followup.send("I don't have permission to delete this ticket.", ephemeral=True)
         except discord.HTTPException:
@@ -3427,7 +3045,6 @@ async def on_ready():
     
     # Initialize database
     await connect_db()
-    await ensure_modular_runtime()
     await reset_daily_message_counts_if_needed()
     bot.add_view(TicketPanelView())
     bot.add_view(TicketCloseView())
@@ -3441,9 +3058,6 @@ async def on_ready():
     await sync_birthday_roles()
     await sync_base_roles_for_all_guilds()
     await sync_permission_roles_for_all_guilds()
-    if MODULAR_SHADOW_MODE:
-        for guild in bot.guilds:
-            await shadow_compare_guild_access(guild)
     
     # Cache all server invites
     for guild in bot.guilds:
@@ -3475,37 +3089,26 @@ async def on_ready():
 async def on_member_join(member):
     """Handle member join and track invites"""
     guild = member.guild
-    before_role_ids = snapshot_role_ids(member)
-    modular_plan = None
 
-    if MODULAR_HANDLERS_ENABLED:
-        await run_modular_join_flow(member, dry_run=False)
-    elif MODULAR_SHADOW_MODE:
-        modular_plan = await get_modular_member_plan(member, "member_join")
+    await sync_base_role_for_member(member)
+    await sync_membership_roles_for_member(member)
+    await ensure_verified_bonus_role(member)
+    await sync_permission_roles_for_member(member)
+    await send_join_visibility_pings(member)
 
-    if not MODULAR_HANDLERS_ENABLED:
-        await sync_base_role_for_member(member)
-        await sync_membership_roles_for_member(member)
-        await ensure_verified_bonus_role(member)
-        await sync_permission_roles_for_member(member)
-        await send_join_visibility_pings(member)
-
-        verification_channel = guild.get_channel(SECURITY_VERIFICATION_CHANNEL_ID)
-        if verification_channel is not None:
-            try:
-                prompt_message = await verification_channel.send(
-                    f"{member.mention} verify here",
-                    allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
-                )
-                await asyncio.sleep(3)
-                await prompt_message.delete()
-            except discord.Forbidden:
-                print(f"Missing permissions to send verification prompt in {guild.name}")
-            except discord.HTTPException:
-                print(f"Failed to send verification prompt in {guild.name}")
-
-    if MODULAR_SHADOW_MODE:
-        compare_member_plan("member_join", member, before_role_ids, modular_plan)
+    verification_channel = guild.get_channel(SECURITY_VERIFICATION_CHANNEL_ID)
+    if verification_channel is not None:
+        try:
+            prompt_message = await verification_channel.send(
+                f"{member.mention} verify here",
+                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+            )
+            await asyncio.sleep(3)
+            await prompt_message.delete()
+        except discord.Forbidden:
+            print(f"Missing permissions to send verification prompt in {guild.name}")
+        except discord.HTTPException:
+            print(f"Failed to send verification prompt in {guild.name}")
 
     # ===== INVITE TRACKING =====
     try:
@@ -3542,22 +3145,10 @@ async def on_member_update(before, after):
     if before.roles == after.roles:
         return
 
-    before_role_ids = snapshot_role_ids(after)
-    modular_plan = None
-
-    if MODULAR_HANDLERS_ENABLED:
-        await run_modular_update_flow(after, dry_run=False)
-    elif MODULAR_SHADOW_MODE:
-        modular_plan = await get_modular_member_plan(after, "member_update")
-
-    if not MODULAR_HANDLERS_ENABLED:
-        await sync_membership_roles_for_member(after)
-        await sync_base_role_for_member(after)
-        await ensure_verified_bonus_role(after)
-        await sync_permission_roles_for_member(after)
-
-    if MODULAR_SHADOW_MODE:
-        compare_member_plan("member_update", after, before_role_ids, modular_plan)
+    await sync_membership_roles_for_member(after)
+    await sync_base_role_for_member(after)
+    await ensure_verified_bonus_role(after)
+    await sync_permission_roles_for_member(after)
 
 
 # ===== TEMP VC SYSTEM =====
@@ -6101,69 +5692,6 @@ async def stats_command(ctx):
         inline=True
     )
 
-    await ctx.send(embed=embed)
-
-
-@bot.group(name="debug", invoke_without_command=True)
-@commands.has_permissions(administrator=True)
-async def debug_command(ctx):
-    await ctx.send("Available subcommands: `debug modular`")
-
-
-@debug_command.command(name="modular")
-@commands.has_permissions(administrator=True)
-async def debug_modular_command(ctx):
-    embed = discord.Embed(title="Modular Runtime Debug", color=discord.Color.blurple())
-    embed.add_field(
-        name="Flags",
-        value=(
-            f"Enabled: `{MODULAR_HANDLERS_ENABLED}`\n"
-            f"Shadow: `{MODULAR_SHADOW_MODE}`"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Runtime",
-        value=(
-            f"Container started: `{modular_container is not None}`\n"
-            f"Runtime error: `{modular_runtime_error or 'none'}`\n"
-            f"Last clean pass: `{last_modular_clean_pass_at or 'none'}`"
-        ),
-        inline=False,
-    )
-    systems = ("member_join", "member_update", "guild_access", "ticket_create", "ticket_close", "ticket_reopen", "ticket_delete")
-    system_lines = []
-    for scope in systems:
-        matches = modular_stats["matches"][scope]
-        diffs = modular_stats["diffs"][scope]
-        noops = modular_stats["noops"][scope]
-        if matches == 0 and diffs == 0 and noops == 0:
-            continue
-        system_lines.append(
-            f"`{scope}` clean `{matches}` diff `{diffs}` noop `{noops}`"
-        )
-    embed.add_field(
-        name="System Health",
-        value="\n".join(system_lines) if system_lines else "No modular observations yet.",
-        inline=False,
-    )
-    recent_diffs = modular_diff_history[-10:]
-    if recent_diffs:
-        lines = [
-            f"`{entry['severity']}` `{entry['scope']}` target `{entry['target_id']}`"
-            for entry in recent_diffs
-        ]
-        diff_value = "\n".join(lines)
-    else:
-        diff_value = "No diffs recorded."
-    embed.add_field(name="Recent Diffs", value=diff_value, inline=False)
-    clean_systems = sum(1 for scope in systems if modular_stats["matches"][scope] > 0 and modular_stats["diffs"][scope] == 0)
-    observed_systems = sum(1 for scope in systems if modular_stats["matches"][scope] > 0 or modular_stats["diffs"][scope] > 0 or modular_stats["noops"][scope] > 0)
-    embed.add_field(
-        name="Clean Pass",
-        value=f"{clean_systems}/{observed_systems or 0} observed systems are clean",
-        inline=False,
-    )
     await ctx.send(embed=embed)
 
 
