@@ -530,7 +530,7 @@ async def get_custom_role_id(guild_id):
     )
 
 
-async def ensure_base_role(member):
+async def sync_base_role_for_member(member):
     if member.bot:
         return
 
@@ -538,16 +538,40 @@ async def ensure_base_role(member):
     if not role_id:
         return
 
+    verified_role = member.guild.get_role(VERIFIED_ROLE_ID)
+    wizards_role = member.guild.get_role(WIZARDS_ROLE_ID)
+    unverified_role = member.guild.get_role(UNVERIFIED_ROLE_ID)
     role = member.guild.get_role(role_id)
-    if role is None or role in member.roles:
+    if role is None:
+        return
+
+    has_base_role = role in member.roles
+    is_verified_member = (
+        (verified_role is not None and verified_role in member.roles)
+        or (wizards_role is not None and wizards_role in member.roles)
+    )
+    is_unverified_member = unverified_role is not None and unverified_role in member.roles
+
+    if is_verified_member and not is_unverified_member:
+        if has_base_role:
+            return
+        try:
+            await member.add_roles(role, reason="Auto-assigned base member role")
+        except discord.Forbidden:
+            print(f"Missing permissions to assign base role for {member}")
+        except discord.HTTPException:
+            print(f"Failed to assign base role for {member}")
+        return
+
+    if not has_base_role:
         return
 
     try:
-        await member.add_roles(role, reason="Auto-assigned base member role")
+        await member.remove_roles(role, reason="Removed base role until member is verified")
     except discord.Forbidden:
-        print(f"Missing permissions to assign base role for {member}")
+        print(f"Missing permissions to remove base role for {member}")
     except discord.HTTPException:
-        print(f"Failed to assign base role for {member}")
+        print(f"Failed to remove base role for {member}")
 
 
 async def sync_base_roles_for_guild(guild):
@@ -560,9 +584,9 @@ async def sync_base_roles_for_guild(guild):
         return
 
     for member in guild.members:
-        if member.bot or role in member.roles:
+        if member.bot:
             continue
-        await ensure_base_role(member)
+        await sync_base_role_for_member(member)
 
 
 async def sync_base_roles_for_all_guilds():
@@ -2939,7 +2963,7 @@ async def on_member_join(member):
     """Handle member join and track invites"""
     guild = member.guild
 
-    await ensure_base_role(member)
+    await sync_base_role_for_member(member)
     await sync_membership_roles_for_member(member)
     await ensure_verified_bonus_role(member)
     await sync_permission_roles_for_member(member)
@@ -2980,6 +3004,7 @@ async def on_member_update(before, after):
         return
 
     await sync_membership_roles_for_member(after)
+    await sync_base_role_for_member(after)
     await ensure_verified_bonus_role(after)
     await sync_permission_roles_for_member(after)
 
