@@ -105,6 +105,12 @@ BLOCKED_WIZARDS_CHANNEL_IDS = {
 WIZARDS_ALLOWED_VOICE_CHANNEL_IDS = {
     1494320978564612277,
 }
+WIZARDS_VIEW_ONLY_VOICE_CHANNEL_IDS = {
+    1379100622309036204,
+}
+WIZARDS_MUTED_VOICE_CATEGORY_IDS = {
+    1379083372998955099,
+}
 WIZARDS_VOICE_CATEGORY_ID = 1379052516863381637
 RESTRICTED_WIZARDS_VOICE_CHANNEL_ID = 1379826132509262025
 SPECIAL_WIZARDS_VOICE_ACCESS_ROLE_ID = 1379461606127177728
@@ -2138,6 +2144,8 @@ async def apply_membership_channel_access(guild):
             or channel_category_id in WIZARDS_SEND_CATEGORY_IDS
         )
         is_voice_channel = isinstance(channel, (discord.VoiceChannel, discord.StageChannel))
+        if is_voice_channel and channel.id in WIZARDS_VIEW_ONLY_VOICE_CHANNEL_IDS:
+            wizard_can_view = True
         wizard_can_connect = (
             channel.id in WIZARDS_ALLOWED_VOICE_CHANNEL_IDS
             or (
@@ -2145,6 +2153,9 @@ async def apply_membership_channel_access(guild):
                 and channel.id != RESTRICTED_WIZARDS_VOICE_CHANNEL_ID
             )
         )
+        if channel.id in WIZARDS_VIEW_ONLY_VOICE_CHANNEL_IDS:
+            wizard_can_connect = False
+        wizard_voice_muted = channel_category_id in WIZARDS_MUTED_VOICE_CATEGORY_IDS
 
         try:
             await channel.set_permissions(unverified_role, view_channel=False)
@@ -2153,6 +2164,7 @@ async def apply_membership_channel_access(guild):
                     wizards_role,
                     view_channel=wizard_can_view,
                     connect=wizard_can_connect,
+                    speak=False if wizard_voice_muted else None,
                 )
                 if channel.id == RESTRICTED_WIZARDS_VOICE_CHANNEL_ID:
                     if special_voice_role is not None:
