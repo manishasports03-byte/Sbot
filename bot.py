@@ -80,6 +80,7 @@ temp_vc_users = {}  # {user_id: channel_id}
 TICKET_PANEL_CHANNEL_ID = 1379498807288529007
 TICKET_SUPPORT_CATEGORY_ID = 1379497343765844218
 TICKET_REWARDS_CATEGORY_ID = 1496957253117415555
+TICKET_HELPER_ROLE_ID = 1500035607966257282
 TICKET_PANEL_MESSAGE_KEY = "ticket_panel_message_id"
 TICKET_PANEL_TITLE = "Create Ticket"
 TICKET_BUTTON_COOLDOWN_SECONDS = 15
@@ -1607,6 +1608,13 @@ async def find_existing_ticket_channel(guild, user_id):
     return None
 
 
+def has_ticket_staff_access(member):
+    if member.guild_permissions.administrator:
+        return True
+
+    return any(role.id == TICKET_HELPER_ROLE_ID for role in member.roles)
+
+
 def build_ticket_panel_embed():
     return build_ticket_embed(
         TICKET_PANEL_TITLE,
@@ -1733,6 +1741,14 @@ class TicketPanelView(discord.ui.View):
                     read_message_history=True,
                     manage_channels=True,
                 )
+
+        ticket_helper_role = interaction.guild.get_role(TICKET_HELPER_ROLE_ID)
+        if ticket_helper_role is not None:
+            overwrites[ticket_helper_role] = discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+            )
 
         try:
             ticket_channel = await interaction.guild.create_text_channel(
@@ -1861,8 +1877,8 @@ class TicketStaffControlsView(discord.ui.View):
         self.owner_id = owner_id
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
+        if not has_ticket_staff_access(interaction.user):
+            await interaction.response.send_message("Only ticket staff can use these controls.", ephemeral=True)
             return False
         return True
 
