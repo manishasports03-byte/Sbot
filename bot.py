@@ -2114,7 +2114,8 @@ async def apply_membership_channel_access(guild):
             )
             await channel.set_permissions(
                 wizards_role,
-                view_channel=False,
+                view_channel=channel.id == CHANT_TO_START_CHANNEL_ID,
+                send_messages=False if channel.id == CHANT_TO_START_CHANNEL_ID else None,
             )
             if channel.id == CHANT_TO_START_CHANNEL_ID and os_role is not None:
                 await channel.set_permissions(
