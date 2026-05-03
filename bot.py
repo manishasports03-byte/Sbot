@@ -1326,9 +1326,9 @@ async def cache_server_invites(guild):
     try:
         invites = await guild.invites()
         server_invites[guild.id] = {invite.code: invite for invite in invites}
-        print(f"✅ Cached {len(invites)} invites for {guild.name}")
+        print(f"Cached {len(invites)} invites for {guild.name}")
     except discord.Forbidden:
-        print(f"⚠️ No permission to view invites in {guild.name}")
+        print(f"No permission to view invites in {guild.name}")
 
 def check_spam(user_id):
     """Check if user is spamming"""
