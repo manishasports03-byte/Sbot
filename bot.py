@@ -2177,7 +2177,6 @@ async def sync_permission_roles_for_member(member):
     }
 
     roles_to_add = []
-    roles_to_remove = []
 
     for target_role_id in managed_target_ids:
         target_role = member.guild.get_role(target_role_id)
@@ -2189,8 +2188,6 @@ async def sync_permission_roles_for_member(member):
 
         if should_have_target_role and not has_target_role:
             roles_to_add.append(target_role)
-        elif not should_have_target_role and has_target_role:
-            roles_to_remove.append(target_role)
 
     if roles_to_add:
         try:
@@ -2202,17 +2199,6 @@ async def sync_permission_roles_for_member(member):
             print(f"Missing permissions to assign permission bundle roles for {member}")
         except discord.HTTPException:
             print(f"Failed to assign permission bundle roles for {member}")
-
-    if roles_to_remove:
-        try:
-            await member.remove_roles(
-                *roles_to_remove,
-                reason="Removed permission bundle roles because source roles no longer match",
-            )
-        except discord.Forbidden:
-            print(f"Missing permissions to remove permission bundle roles for {member}")
-        except discord.HTTPException:
-            print(f"Failed to remove permission bundle roles for {member}")
 
 
 async def sync_permission_roles_for_guild(guild):
@@ -2569,13 +2555,6 @@ class AFKConfirmView(discord.ui.View):
 
     @discord.ui.button(label="Yes", style=discord.ButtonStyle.success)
     async def confirm_afk(self, interaction, button):
-        if self.member.id == self.member.guild.owner_id:
-            await interaction.response.edit_message(
-                content=f"{self.member.mention} you are the server owner, you can't set AFK!",
-                view=None,
-            )
-            return
-
         try:
             await set_afk(self.member, self.reason)
         except discord.Forbidden:
