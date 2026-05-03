@@ -1,5 +1,6 @@
 discord.py==2.3.2
 python-dotenv
 asyncpg
+Pillow
 audioop-lts; python_version >= "3.13"
 

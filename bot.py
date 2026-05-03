@@ -85,6 +85,12 @@ TICKET_PANEL_MESSAGE_KEY = "ticket_panel_message_id"
 TICKET_PANEL_TITLE = "Create Ticket"
 TICKET_BUTTON_COOLDOWN_SECONDS = 15
 ticket_button_cooldowns = {}
+VERIFICATION_PANEL_MESSAGE_KEY = "verification_panel_message_id"
+VERIFICATION_PANEL_TITLE = "Security"
+VERIFICATION_PANEL_IMAGE_URL = "https://media.discordapp.net/attachments/1379072095899615232/1494284320599179356/ezgif-549dd942b0d67c6a.gif?ex=69f875b8&is=69f72438&hm=d9b2a3ac492c848e128e7ff5c715cfd33a5dc2505f64c470e957f27c5e92bfeb&=&width=335&height=289"
+UNVERIFIED_ROLE_ID = 1500562676781416710
+VERIFIED_ROLE_ID = 1500562574511444139
+PEASANT_ROLE_ID = 1500565277845487836
 MEDIA_ONLY_CHANNEL_ID = 1379065330957160560
 ONBOARDING_CATEGORY_ID = 1379780404894236744
 CHANT_TO_START_CHANNEL_ID = 1379780588193448027
@@ -969,6 +975,7 @@ def extract_sticker_asset(message):
     return {
         "kind": "sticker",
         "name": sanitize_asset_name(sticker.name, "stolen_sticker"),
+        "format": sticker_format or extension,
         "url": str(sticker.url),
         "filename": f"{sanitize_asset_name(sticker.name, 'stolen_sticker')}.{extension}",
     }
@@ -980,6 +987,49 @@ async def download_asset_bytes(url):
             if response.status != 200:
                 raise ValueError("Failed to download asset.")
             return await response.read()
+
+
+def convert_gif_bytes_to_apng_bytes(gif_bytes):
+    try:
+        from PIL import Image, ImageSequence
+    except ImportError as error:
+        raise ValueError("Pillow is required to convert animated stickers.") from error
+
+    with Image.open(io.BytesIO(gif_bytes)) as image:
+        frames = []
+        durations = []
+        loop = image.info.get("loop", 0)
+
+        for frame in ImageSequence.Iterator(image):
+            frames.append(frame.convert("RGBA"))
+            durations.append(frame.info.get("duration", image.info.get("duration", 100)))
+
+        if not frames:
+            raise ValueError("No frames found in GIF sticker.")
+
+        output = io.BytesIO()
+        first_frame, *remaining_frames = frames
+        first_frame.save(
+            output,
+            format="PNG",
+            save_all=True,
+            append_images=remaining_frames,
+            duration=durations,
+            loop=loop,
+            disposal=2,
+        )
+        return output.getvalue()
+
+
+def build_sticker_upload_file(asset_data, asset_bytes):
+    sticker_format = asset_data.get("format", "").lower()
+
+    if sticker_format == "gif":
+        converted_bytes = convert_gif_bytes_to_apng_bytes(asset_bytes)
+        filename = f"{sanitize_asset_name(asset_data['name'], 'stolen_sticker')}.png"
+        return discord.File(io.BytesIO(converted_bytes), filename=filename)
+
+    return discord.File(io.BytesIO(asset_bytes), filename=asset_data["filename"])
 
 
 async def resolve_role_from_text(ctx, role_text):
@@ -1118,7 +1168,7 @@ class StealAssetView(discord.ui.View):
 
         try:
             asset_bytes = await download_asset_bytes(self.asset_data["url"])
-            asset_file = discord.File(io.BytesIO(asset_bytes), filename=self.asset_data["filename"])
+            asset_file = build_sticker_upload_file(self.asset_data, asset_bytes)
             await guild.create_sticker(
                 name=sanitize_asset_name(self.asset_data["name"], "stolen_sticker"),
                 description="Stolen asset",
@@ -1496,6 +1546,16 @@ def build_ticket_panel_embed():
     )
 
 
+def build_verification_panel_embed():
+    embed = discord.Embed(
+        title=VERIFICATION_PANEL_TITLE,
+        description="This server requires you to verify yourself to get access to other channels, you can simply verify by clicking on the verify button.",
+        color=discord.Color.from_str("#2b2d31"),
+    )
+    embed.set_image(url=VERIFICATION_PANEL_IMAGE_URL)
+    return embed
+
+
 async def send_ticket_panel(channel):
     return await send_or_update_ticket_panel(channel)
 
@@ -1533,6 +1593,33 @@ async def send_or_update_ticket_panel(channel):
     return message
 
 
+async def send_or_update_verification_panel(channel):
+    embed = build_verification_panel_embed()
+    view = VerificationPanelView()
+    stored_message_id = await get_state_value(VERIFICATION_PANEL_MESSAGE_KEY)
+    if stored_message_id:
+        try:
+            message = await channel.fetch_message(int(stored_message_id))
+            await message.edit(embed=embed, view=view)
+            return message
+        except (ValueError, discord.NotFound, discord.Forbidden, discord.HTTPException):
+            pass
+
+    try:
+        async for message in channel.history(limit=10):
+            if message.author.id == bot.user.id and message.embeds:
+                if message.embeds[0].title == VERIFICATION_PANEL_TITLE:
+                    await message.edit(embed=embed, view=view)
+                    await set_state_value(VERIFICATION_PANEL_MESSAGE_KEY, str(message.id))
+                    return message
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+    message = await channel.send(embed=embed, view=view)
+    await set_state_value(VERIFICATION_PANEL_MESSAGE_KEY, str(message.id))
+    return message
+
+
 async def ensure_ticket_panel():
     panel_channel = bot.get_channel(TICKET_PANEL_CHANNEL_ID)
     if panel_channel is None:
@@ -1543,6 +1630,20 @@ async def ensure_ticket_panel():
 
     try:
         await send_or_update_ticket_panel(panel_channel)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
+async def ensure_verification_panel():
+    channel = bot.get_channel(SECURITY_VERIFICATION_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(SECURITY_VERIFICATION_CHANNEL_ID)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return
+
+    try:
+        await send_or_update_verification_panel(channel)
     except (discord.Forbidden, discord.HTTPException):
         pass
 
@@ -1672,6 +1773,45 @@ class TicketPanelView(discord.ui.View):
 class TicketCreateView(TicketPanelView):
     """Compatibility alias for the existing tickets command."""
     pass
+
+
+class VerificationPanelView(discord.ui.View):
+    """Persistent verification panel."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Verify", style=discord.ButtonStyle.primary, custom_id="security_verify")
+    async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.guild is None:
+            await interaction.response.send_message("Verification done.", ephemeral=True)
+            return
+
+        member = interaction.guild.get_member(interaction.user.id)
+        if member is None:
+            await interaction.response.send_message("Verification done.", ephemeral=True)
+            return
+
+        verified_role = interaction.guild.get_role(VERIFIED_ROLE_ID)
+        unverified_role = interaction.guild.get_role(UNVERIFIED_ROLE_ID)
+
+        if verified_role is None:
+            await interaction.response.send_message("Verified role not found.", ephemeral=True)
+            return
+
+        try:
+            if verified_role not in member.roles:
+                await member.add_roles(verified_role, reason="Member verified through security panel")
+            if unverified_role is not None and unverified_role in member.roles:
+                await member.remove_roles(unverified_role, reason="Member verified through security panel")
+            await ensure_peasant_role(member)
+        except discord.Forbidden:
+            await interaction.response.send_message("I can't update your roles.", ephemeral=True)
+            return
+        except discord.HTTPException:
+            await interaction.response.send_message("Verification failed.", ephemeral=True)
+            return
+
+        await interaction.response.send_message("Verification done.", ephemeral=True)
 
 
 class TicketCloseConfirmView(discord.ui.View):
@@ -1873,6 +2013,36 @@ def find_role(guild, role_name):
             return role
 
     return None
+
+
+async def ensure_peasant_role(member):
+    if member.bot:
+        return
+
+    verified_role = member.guild.get_role(VERIFIED_ROLE_ID)
+    peasant_role = member.guild.get_role(PEASANT_ROLE_ID)
+    if verified_role is None or peasant_role is None:
+        return
+
+    if verified_role not in member.roles or peasant_role in member.roles:
+        return
+
+    try:
+        await member.add_roles(peasant_role, reason="Auto-assigned main member role for verified member")
+    except discord.Forbidden:
+        print(f"Missing permissions to assign peasant role for {member}")
+    except discord.HTTPException:
+        print(f"Failed to assign peasant role for {member}")
+
+
+async def sync_peasant_roles_for_all_guilds():
+    for guild in bot.guilds:
+        verified_role = guild.get_role(VERIFIED_ROLE_ID)
+        if verified_role is None:
+            continue
+
+        for member in verified_role.members:
+            await ensure_peasant_role(member)
 
 
 async def handle_role_toggle(message):
@@ -2509,7 +2679,10 @@ async def on_ready():
     bot.add_view(TicketPanelView())
     bot.add_view(TicketCloseView())
     bot.add_view(TicketStaffControlsView())
+    bot.add_view(VerificationPanelView())
     await ensure_ticket_panel()
+    await ensure_verification_panel()
+    await sync_peasant_roles_for_all_guilds()
     # Cache all server invites
     for guild in bot.guilds:
         await cache_server_invites(guild)
@@ -2538,19 +2711,15 @@ async def on_member_join(member):
     """Handle member join and track invites"""
     guild = member.guild
 
-    verification_channel = guild.get_channel(SECURITY_VERIFICATION_CHANNEL_ID)
-    if verification_channel is not None:
+    unverified_role = guild.get_role(UNVERIFIED_ROLE_ID)
+    if unverified_role is not None and not member.bot:
         try:
-            prompt_message = await verification_channel.send(
-                f"{member.mention} verify here",
-                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
-            )
-            await asyncio.sleep(3)
-            await prompt_message.delete()
+            if unverified_role not in member.roles:
+                await member.add_roles(unverified_role, reason="Assigned unverified role on join")
         except discord.Forbidden:
-            print(f"Missing permissions to send verification prompt in {guild.name}")
+            print(f"Missing permissions to assign unverified role for {member}")
         except discord.HTTPException:
-            print(f"Failed to send verification prompt in {guild.name}")
+            print(f"Failed to assign unverified role for {member}")
 
     # ===== INVITE TRACKING =====
     try:
@@ -2611,6 +2780,8 @@ async def on_member_remove(member):
 async def on_member_update(before, after):
     if before.roles == after.roles:
         return
+
+    await ensure_peasant_role(after)
 
 
 # ===== TEMP VC SYSTEM =====
