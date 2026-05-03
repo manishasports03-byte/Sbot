@@ -122,51 +122,86 @@ WIZARDS_VOICE_CATEGORY_ID = 1379052516863381637
 RESTRICTED_WIZARDS_VOICE_CHANNEL_ID = 1379826132509262025
 SPECIAL_WIZARDS_VOICE_ACCESS_ROLE_ID = 1379461606127177728
 BIRTHDAY_ROLE_ID = 1380464856016097341
-VIRELYA_ROLE_ID = 1499783835594788894
-SEARASTA_ROLE_ID = 1499785700533473290
-ARCHWIZARD_ROLE_ID = 1499785874559209532
-OS_ROLE_ID = 1499980794133876857
-REQ_ROLE_ID = 1499993788452569129
-KICK_ROLE_ID = 1499994064425324594
-MUTE_ROLE_ID = 1499994184801845370
-BAN_ROLE_ID = 1499994263084339350
-VOICE_ROLE_ID = 1499994335360323645
-MEDIA_ROLE_ID = 1499994927168225330
-HIGH_ARCANIST_ROLE_ID = 1499786167749578943
-NEBULARC_ROLE_ID = 1499786383265370143
-SPELLWARDEN_ROLE_ID = 1499786512433156136
-ENIGMANCER_ROLE_ID = 1499786767090319522
-ECHOKEEPER_ROLE_ID = 1499786856324137091
-MELODIST_ROLE_ID = 1499787024750743623
-APPOLO_ROLE_ID = 1499787129532842004
-ECLIPSEBOUND_ELITE_ROLE_ID = 1499787129532842004
-NOVA_WATCH_ROLE_ID = 1499787241030160394
+VIRELYA_ROLE_ID = 1500563026112286781
+SEARASTA_ROLE_ID = 1500563240965505034
+ARCHWIZARD_ROLE_ID = 1500563396473524365
+HIGH_ARCANIST_ROLE_ID = 1500563428941500427
+NEBULARC_ROLE_ID = 1500563495098515656
+SPELLWARDEN_ROLE_ID = 1500563546377949316
+ENIGMANCER_ROLE_ID = 1500563589906567268
+ECHOKEEPER_ROLE_ID = 1500563626770173952
+MELODIST_ROLE_ID = 1500563789525811342
+APPOLO_ROLE_ID = 1500563961609719889
+ECLIPSEBOUND_ELITE_ROLE_ID = 1500564044443029534
+LUMINARY_ROLE_ID = 1500564161980141700
+NOVA_WATCH_ROLE_ID = 1500564220607988024
+CRYSTAL_MARSHAL_ROLE_ID = 1500564329215430748
+EMBER_JUDGE_ROLE_ID = 1500564374039822597
+CURSEMENDER_ROLE_ID = 1500564561030549654
+WHISPER_BINDER_ROLE_ID = 1500564667561414657
+DREAMWALKER_ROLE_ID = 1500564720661561374
+ECLIPSED_SOULS_ROLE_ID = 1500564784947663063
+MISERY_IMP_ROLE_ID = 1500564917197996212
+ARCANE_SQUIRE_ROLE_ID = 1500565020822736936
+WIZARDS_ROLE_ID = 1500565118138974209
+OS_ROLE_ID = 1500560210224484505
+MEDIA_ROLE_ID = 1500560404445659156
+REQ_ROLE_ID = 1500560712982986803
+KICK_ROLE_ID = 1500560891996012574
+BAN_ROLE_ID = 1500561000812904478
+MUTE_ROLE_ID = 1500561060388671640
+VOICE_ROLE_ID = 1500561183122395367
+PASS_ROLE_ID = 1500561399859122328
+TICKET_ACCESS_ROLE_ID = 1500561695540641933
 DEFAULT_PERMISSION_ROLE_LINKS = (
     (VIRELYA_ROLE_ID, OS_ROLE_ID),
-    (SEARASTA_ROLE_ID, OS_ROLE_ID),
-    (ARCHWIZARD_ROLE_ID, OS_ROLE_ID),
     (VIRELYA_ROLE_ID, MEDIA_ROLE_ID),
+    (SEARASTA_ROLE_ID, OS_ROLE_ID),
     (SEARASTA_ROLE_ID, MEDIA_ROLE_ID),
+    (ARCHWIZARD_ROLE_ID, OS_ROLE_ID),
     (ARCHWIZARD_ROLE_ID, MEDIA_ROLE_ID),
     (HIGH_ARCANIST_ROLE_ID, REQ_ROLE_ID),
     (HIGH_ARCANIST_ROLE_ID, KICK_ROLE_ID),
-    (HIGH_ARCANIST_ROLE_ID, MUTE_ROLE_ID),
     (HIGH_ARCANIST_ROLE_ID, BAN_ROLE_ID),
+    (HIGH_ARCANIST_ROLE_ID, MUTE_ROLE_ID),
     (HIGH_ARCANIST_ROLE_ID, VOICE_ROLE_ID),
+    (HIGH_ARCANIST_ROLE_ID, PASS_ROLE_ID),
     (HIGH_ARCANIST_ROLE_ID, MEDIA_ROLE_ID),
+    (NEBULARC_ROLE_ID, REQ_ROLE_ID),
     (NEBULARC_ROLE_ID, KICK_ROLE_ID),
     (NEBULARC_ROLE_ID, MUTE_ROLE_ID),
-    (NEBULARC_ROLE_ID, BAN_ROLE_ID),
     (NEBULARC_ROLE_ID, VOICE_ROLE_ID),
+    (NEBULARC_ROLE_ID, PASS_ROLE_ID),
     (NEBULARC_ROLE_ID, MEDIA_ROLE_ID),
+    (SPELLWARDEN_ROLE_ID, REQ_ROLE_ID),
     (SPELLWARDEN_ROLE_ID, KICK_ROLE_ID),
     (SPELLWARDEN_ROLE_ID, MUTE_ROLE_ID),
-    (SPELLWARDEN_ROLE_ID, VOICE_ROLE_ID),
     (SPELLWARDEN_ROLE_ID, MEDIA_ROLE_ID),
+    (ENIGMANCER_ROLE_ID, PASS_ROLE_ID),
+    (ENIGMANCER_ROLE_ID, MEDIA_ROLE_ID),
     (ECHOKEEPER_ROLE_ID, VOICE_ROLE_ID),
     (ECHOKEEPER_ROLE_ID, MEDIA_ROLE_ID),
+    (MELODIST_ROLE_ID, VOICE_ROLE_ID),
     (MELODIST_ROLE_ID, MEDIA_ROLE_ID),
     (APPOLO_ROLE_ID, MEDIA_ROLE_ID),
+    (ECLIPSEBOUND_ELITE_ROLE_ID, MEDIA_ROLE_ID),
+    (LUMINARY_ROLE_ID, MEDIA_ROLE_ID),
+    (NOVA_WATCH_ROLE_ID, TICKET_ACCESS_ROLE_ID),
+    (NOVA_WATCH_ROLE_ID, MEDIA_ROLE_ID),
+    (CRYSTAL_MARSHAL_ROLE_ID, MEDIA_ROLE_ID),
+    (EMBER_JUDGE_ROLE_ID, BAN_ROLE_ID),
+    (EMBER_JUDGE_ROLE_ID, KICK_ROLE_ID),
+    (EMBER_JUDGE_ROLE_ID, MUTE_ROLE_ID),
+    (EMBER_JUDGE_ROLE_ID, MEDIA_ROLE_ID),
+    (CURSEMENDER_ROLE_ID, BAN_ROLE_ID),
+    (CURSEMENDER_ROLE_ID, MUTE_ROLE_ID),
+    (CURSEMENDER_ROLE_ID, MEDIA_ROLE_ID),
+    (WHISPER_BINDER_ROLE_ID, MEDIA_ROLE_ID),
+    (DREAMWALKER_ROLE_ID, MEDIA_ROLE_ID),
+    (ECLIPSED_SOULS_ROLE_ID, MEDIA_ROLE_ID),
+    (MISERY_IMP_ROLE_ID, MEDIA_ROLE_ID),
+    (ARCANE_SQUIRE_ROLE_ID, MEDIA_ROLE_ID),
+    (WIZARDS_ROLE_ID, MEDIA_ROLE_ID),
 )
 IST = timezone(timedelta(hours=5, minutes=30))
 AUTORESPONDER_COOLDOWN_SECONDS = 2
@@ -2045,6 +2080,51 @@ async def sync_peasant_roles_for_all_guilds():
             await ensure_peasant_role(member)
 
 
+async def ensure_permission_bundle_roles(member):
+    if member.bot:
+        return
+
+    source_role_ids = {role.id for role in member.roles}
+    desired_target_ids = {
+        target_role_id
+        for source_role_id, target_role_id in DEFAULT_PERMISSION_ROLE_LINKS
+        if source_role_id in source_role_ids
+    }
+    managed_target_ids = {target_role_id for _, target_role_id in DEFAULT_PERMISSION_ROLE_LINKS}
+
+    roles_to_add = []
+    roles_to_remove = []
+
+    for target_role_id in managed_target_ids:
+        target_role = member.guild.get_role(target_role_id)
+        if target_role is None:
+            continue
+
+        has_target_role = target_role in member.roles
+        should_have_target_role = target_role_id in desired_target_ids
+
+        if should_have_target_role and not has_target_role:
+            roles_to_add.append(target_role)
+        elif not should_have_target_role and has_target_role:
+            roles_to_remove.append(target_role)
+
+    try:
+        if roles_to_add:
+            await member.add_roles(*roles_to_add, reason="Auto-assigned permission roles from staff role")
+        if roles_to_remove:
+            await member.remove_roles(*roles_to_remove, reason="Removed permission roles after staff role change")
+    except discord.Forbidden:
+        print(f"Missing permissions to sync permission bundle roles for {member}")
+    except discord.HTTPException:
+        print(f"Failed to sync permission bundle roles for {member}")
+
+
+async def sync_permission_bundle_roles_for_all_guilds():
+    for guild in bot.guilds:
+        for member in guild.members:
+            await ensure_permission_bundle_roles(member)
+
+
 async def handle_role_toggle(message):
     if not message.guild:
         await message.channel.send("Role changes only work inside a server.")
@@ -2683,6 +2763,7 @@ async def on_ready():
     await ensure_ticket_panel()
     await ensure_verification_panel()
     await sync_peasant_roles_for_all_guilds()
+    await sync_permission_bundle_roles_for_all_guilds()
     # Cache all server invites
     for guild in bot.guilds:
         await cache_server_invites(guild)
@@ -2782,6 +2863,7 @@ async def on_member_update(before, after):
         return
 
     await ensure_peasant_role(after)
+    await ensure_permission_bundle_roles(after)
 
 
 # ===== TEMP VC SYSTEM =====
@@ -5202,3 +5284,4 @@ if not token:
 
 bot.run(token)
 
+    
