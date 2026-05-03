@@ -1057,15 +1057,20 @@ def convert_gif_bytes_to_apng_bytes(gif_bytes):
         return output.getvalue()
 
 
-def build_sticker_upload_file(asset_data, asset_bytes):
+def build_sticker_upload_files(asset_data, asset_bytes):
     sticker_format = asset_data.get("format", "").lower()
+    files = [discord.File(io.BytesIO(asset_bytes), filename=asset_data["filename"])]
 
     if sticker_format == "gif":
-        converted_bytes = convert_gif_bytes_to_apng_bytes(asset_bytes)
-        filename = f"{sanitize_asset_name(asset_data['name'], 'stolen_sticker')}.png"
-        return discord.File(io.BytesIO(converted_bytes), filename=filename)
+        try:
+            converted_bytes = convert_gif_bytes_to_apng_bytes(asset_bytes)
+        except ValueError:
+            return files
 
-    return discord.File(io.BytesIO(asset_bytes), filename=asset_data["filename"])
+        filename = f"{sanitize_asset_name(asset_data['name'], 'stolen_sticker')}.png"
+        files.append(discord.File(io.BytesIO(converted_bytes), filename=filename))
+
+    return files
 
 
 async def resolve_role_from_text(ctx, role_text):
@@ -1204,14 +1209,27 @@ class StealAssetView(discord.ui.View):
 
         try:
             asset_bytes = await download_asset_bytes(self.asset_data["url"])
-            asset_file = build_sticker_upload_file(self.asset_data, asset_bytes)
-            await guild.create_sticker(
-                name=sanitize_asset_name(self.asset_data["name"], "stolen_sticker"),
-                description="Stolen asset",
-                emoji="🙂",
-                file=asset_file,
-                reason=f"Asset stolen by {interaction.user}",
-            )
+            upload_files = build_sticker_upload_files(self.asset_data, asset_bytes)
+            last_http_error = None
+
+            for asset_file in upload_files:
+                try:
+                    await guild.create_sticker(
+                        name=sanitize_asset_name(self.asset_data["name"], "stolen_sticker"),
+                        description="Stolen asset",
+                        emoji=":)",
+                        file=asset_file,
+                        reason=f"Asset stolen by {interaction.user}",
+                    )
+                except discord.HTTPException as error:
+                    last_http_error = error
+                    continue
+                else:
+                    last_http_error = None
+                    break
+
+            if last_http_error is not None:
+                raise last_http_error
         except discord.Forbidden:
             await interaction.response.send_message(
                 embed=build_asset_embed("Steal Asset", "Missing permission to add stickers.", success=False),
