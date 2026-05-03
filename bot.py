@@ -394,6 +394,14 @@ async def create_tables():
             PRIMARY KEY (guild_id, source_role_id, target_role_id)
         )
     """)
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS permission_role_opt_outs (
+            guild_id BIGINT,
+            user_id BIGINT,
+            target_role_id BIGINT,
+            PRIMARY KEY (guild_id, user_id, target_role_id)
+        )
+    """)
     print("Tables ensured/created")
 
 
@@ -892,6 +900,58 @@ async def get_effective_permission_role_links(guild_id):
         {"source_role_id": source_role_id, "target_role_id": target_role_id}
         for source_role_id, target_role_id in sorted(links, key=lambda pair: (pair[1], pair[0]))
     ]
+
+
+async def add_permission_role_opt_out(guild_id, user_id, target_role_id):
+    await db_execute(
+        """
+        INSERT INTO permission_role_opt_outs (guild_id, user_id, target_role_id)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id, user_id, target_role_id)
+        DO NOTHING
+        """,
+        guild_id,
+        user_id,
+        target_role_id,
+        log_context=f"Saved permission role opt-out {target_role_id} for user {user_id} in guild {guild_id}",
+    )
+
+
+async def remove_permission_role_opt_out(guild_id, user_id, target_role_id):
+    await db_execute(
+        "DELETE FROM permission_role_opt_outs WHERE guild_id = $1 AND user_id = $2 AND target_role_id = $3",
+        guild_id,
+        user_id,
+        target_role_id,
+        log_context=f"Removed permission role opt-out {target_role_id} for user {user_id} in guild {guild_id}",
+    )
+
+
+async def clear_permission_role_opt_outs(guild_id, user_id, target_role_ids):
+    if not target_role_ids:
+        return
+
+    await db_execute(
+        "DELETE FROM permission_role_opt_outs WHERE guild_id = $1 AND user_id = $2 AND target_role_id = ANY($3::BIGINT[])",
+        guild_id,
+        user_id,
+        list(target_role_ids),
+        log_context=f"Cleared permission role opt-outs for user {user_id} in guild {guild_id}: {sorted(target_role_ids)}",
+    )
+
+
+async def get_permission_role_opt_outs(guild_id, user_id):
+    rows = await db_fetch(
+        """
+        SELECT target_role_id
+        FROM permission_role_opt_outs
+        WHERE guild_id = $1 AND user_id = $2
+        """,
+        guild_id,
+        user_id,
+        log_fetch=False,
+    )
+    return {row["target_role_id"] for row in rows}
 
 
 async def get_message_stats(guild_id, user_id):
@@ -2233,8 +2293,10 @@ async def sync_permission_roles_for_member(member):
         for row in links
         if row["source_role_id"] in source_role_ids
     }
+    opted_out_target_ids = await get_permission_role_opt_outs(member.guild.id, member.id)
 
     roles_to_add = []
+    roles_to_remove = []
 
     for target_role_id in managed_target_ids:
         target_role = member.guild.get_role(target_role_id)
@@ -2244,8 +2306,10 @@ async def sync_permission_roles_for_member(member):
         has_target_role = target_role in member.roles
         should_have_target_role = target_role_id in desired_target_ids
 
-        if should_have_target_role and not has_target_role:
+        if should_have_target_role and not has_target_role and target_role_id not in opted_out_target_ids:
             roles_to_add.append(target_role)
+        elif not should_have_target_role and has_target_role:
+            roles_to_remove.append(target_role)
 
     if roles_to_add:
         try:
@@ -2257,6 +2321,49 @@ async def sync_permission_roles_for_member(member):
             print(f"Missing permissions to assign permission bundle roles for {member}")
         except discord.HTTPException:
             print(f"Failed to assign permission bundle roles for {member}")
+
+    if roles_to_remove:
+        try:
+            await member.remove_roles(
+                *roles_to_remove,
+                reason="Removed permission bundle roles because source roles no longer match",
+            )
+        except discord.Forbidden:
+            print(f"Missing permissions to remove permission bundle roles for {member}")
+        except discord.HTTPException:
+            print(f"Failed to remove permission bundle roles for {member}")
+
+    stale_opt_outs = opted_out_target_ids - desired_target_ids
+    if stale_opt_outs:
+        await clear_permission_role_opt_outs(member.guild.id, member.id, stale_opt_outs)
+
+
+async def update_permission_role_opt_outs_for_member(before, after):
+    if after.bot:
+        return
+
+    links = await get_effective_permission_role_links(after.guild.id)
+    if not links:
+        return
+
+    managed_target_ids = {row["target_role_id"] for row in links}
+    desired_target_ids = {
+        row["target_role_id"]
+        for row in links
+        if any(role.id == row["source_role_id"] for role in after.roles)
+    }
+
+    before_role_ids = {role.id for role in before.roles}
+    after_role_ids = {role.id for role in after.roles}
+
+    removed_role_ids = before_role_ids - after_role_ids
+    added_role_ids = after_role_ids - before_role_ids
+
+    for target_role_id in removed_role_ids & managed_target_ids & desired_target_ids:
+        await add_permission_role_opt_out(after.guild.id, after.id, target_role_id)
+
+    for target_role_id in added_role_ids & managed_target_ids:
+        await remove_permission_role_opt_out(after.guild.id, after.id, target_role_id)
 
 
 async def sync_permission_roles_for_guild(guild):
@@ -3010,6 +3117,7 @@ async def on_member_update(before, after):
     if before.roles == after.roles:
         return
 
+    await update_permission_role_opt_outs_for_member(before, after)
     await sync_membership_roles_for_member(after)
     await sync_base_role_for_member(after)
     await ensure_verified_bonus_role(after)
