@@ -59,7 +59,7 @@ NO_PREFIX_COMMANDS = {
     "lb", "leaderboard",
     "warn", "mute", "unmute", "kick", "ban", "purge", "slowmode",
     "gstart", "gend", "greroll",
-    "steal",
+    "steal", "roleicon",
 }
 
 # ===== ACTIVITY ROTATION =====
@@ -1152,6 +1152,54 @@ async def download_asset_bytes(url):
             return await response.read()
 
 
+async def resolve_role_from_text(ctx, role_text):
+    role_text = (role_text or "").strip()
+    if not role_text:
+        return None
+
+    try:
+        return await commands.RoleConverter().convert(ctx, role_text)
+    except commands.BadArgument:
+        lowered_role_text = role_text.casefold()
+        for role in ctx.guild.roles:
+            if role.name.casefold() == lowered_role_text:
+                return role
+    return None
+
+
+async def resolve_role_icon_payload(icon_input):
+    icon_input = (icon_input or "").strip()
+    if not icon_input:
+        raise ValueError("Provide an emoji for the role icon.")
+
+    partial = discord.PartialEmoji.from_str(icon_input)
+    if partial.id:
+        return await download_asset_bytes(str(partial.url)), icon_input
+    return icon_input, icon_input
+
+
+async def parse_roleicon_inputs(ctx, raw_input):
+    raw_input = (raw_input or "").strip()
+    if not raw_input:
+        raise ValueError("Usage: `.roleicon <role> <emoji>`")
+
+    role = None
+    icon_input = None
+    parts = raw_input.split()
+
+    for split_index in range(len(parts) - 1, 0, -1):
+        candidate_role_text = " ".join(parts[:split_index])
+        candidate_icon_input = " ".join(parts[split_index:])
+        role = await resolve_role_from_text(ctx, candidate_role_text)
+        if role is None:
+            continue
+        icon_input = candidate_icon_input.strip()
+        if icon_input:
+            return role, icon_input
+
+    raise ValueError("Usage: `.roleicon <role> <emoji>`")
+
+
 class StealAssetView(discord.ui.View):
     def __init__(self, author_id, asset_data):
         super().__init__(timeout=180)
@@ -1590,6 +1638,16 @@ def can_use_command_role(member, *role_ids):
         return True
 
     return any(member_has_role_id(member, role_id) for role_id in role_ids)
+
+
+def can_use_no_prefix_command(member, command_name):
+    if command_name == "roleicon":
+        return member_has_role_id(member, OS_ROLE_ID)
+
+    permissions = getattr(member, "guild_permissions", None)
+    if permissions and (permissions.administrator or permissions.manage_guild):
+        return True
+    return False
 
 
 def build_ticket_panel_embed():
@@ -3242,6 +3300,60 @@ async def roleinfo_command(ctx, *, role: discord.Role):
     await ctx.send(embed=embed)
 
 
+@bot.command(name="roleicon")
+async def roleicon_command(ctx, *, role_and_icon: str = None):
+    """Set the icon for a role using a unicode or custom emoji."""
+    if not ctx.guild:
+        await ctx.send(embed=build_asset_embed("Role Icon", "This command only works in a server.", success=False))
+        return
+
+    if not member_has_role_id(ctx.author, OS_ROLE_ID):
+        await ctx.send(embed=build_asset_embed("Role Icon", "You need the OS role to use this command.", success=False))
+        return
+
+    if not ctx.guild.me.guild_permissions.manage_roles:
+        await ctx.send(embed=build_asset_embed("Role Icon", "I need Manage Roles permission to edit role icons.", success=False))
+        return
+
+    try:
+        role, icon_input = await parse_roleicon_inputs(ctx, role_and_icon)
+        display_icon, display_label = await resolve_role_icon_payload(icon_input)
+    except ValueError as error:
+        await ctx.send(embed=build_asset_embed("Role Icon", str(error), success=False))
+        return
+
+    if role >= ctx.guild.me.top_role:
+        await ctx.send(embed=build_asset_embed("Role Icon", "That role is above my highest role, so I can't edit it.", success=False))
+        return
+
+    try:
+        await role.edit(
+            display_icon=display_icon,
+            reason=f"Role icon updated by {ctx.author} ({ctx.author.id})",
+        )
+    except discord.Forbidden:
+        await ctx.send(embed=build_asset_embed("Role Icon", "I don't have permission to edit that role.", success=False))
+        return
+    except discord.HTTPException as error:
+        error_text = str(error).lower()
+        if "role icon" in error_text or "display icon" in error_text:
+            message = "This server does not currently allow role icons, or that icon format is invalid."
+        else:
+            message = "I couldn't update that role icon."
+        await ctx.send(embed=build_asset_embed("Role Icon", message, success=False))
+        return
+
+    await ctx.send(embed=build_asset_embed("Role Icon", f"Updated {role.mention} icon to {display_label}."))
+
+
+@roleicon_command.error
+async def roleicon_command_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(embed=build_asset_embed("Role Icon", "Usage: `.roleicon <role> <emoji>`", success=False))
+        return
+    raise error
+
+
 @bot.command(name="vcinfo")
 async def vcinfo_command(ctx, channel: discord.VoiceChannel = None):
     """Show voice channel info"""
@@ -4480,19 +4592,17 @@ async def on_message(message):
     msg = message.content.lower()
     current_prefix = get_command_prefix(bot, message)
     first_word = message.content.split(maxsplit=1)[0].lower() if message.content.strip() else ""
-    is_admin_user = bool(
+    can_run_no_prefix_command = bool(
         message.guild
-        and (
-            message.author.guild_permissions.administrator
-            or message.author.guild_permissions.manage_guild
-        )
+        and first_word in NO_PREFIX_COMMANDS
+        and can_use_no_prefix_command(message.author, first_word)
     )
     no_prefix_blocked_channel = (
         message.guild is not None
         and message.channel.id == NO_PREFIX_DISABLED_CHANNEL_ID
     )
     is_command_message = message.content.startswith(current_prefix) or (
-        is_admin_user and first_word in NO_PREFIX_COMMANDS and not no_prefix_blocked_channel
+        can_run_no_prefix_command and not no_prefix_blocked_channel
     )
 
     if (
@@ -4528,7 +4638,7 @@ async def on_message(message):
         and not message.content.startswith(current_prefix)
         and not no_prefix_blocked_channel
     ):
-        if is_admin_user and first_word in NO_PREFIX_COMMANDS:
+        if can_run_no_prefix_command:
             prefixed_message = copy.copy(message)
             prefixed_message.content = f"{DEFAULT_PREFIX}{message.content}"
             ctx = await bot.get_context(prefixed_message)
@@ -4756,6 +4866,7 @@ class ModuleView(discord.ui.View):
 `.serverinfo` - Show server details
 `.userinfo [@user]` - Show user info
 `.roleinfo @role` - Show role info
+`.roleicon <role> <emoji>` - Change a role icon (OS only)
 `.vcinfo [channel]` - Show voice channel info
 `.avatar [@user]` - Show user's avatar
 `.banner [@user]` - Show user's banner
@@ -4912,6 +5023,7 @@ class HelpView(discord.ui.View):
 `.serverinfo` - Show server details
 `.userinfo [@user]` - Show user info
 `.roleinfo @role` - Show role info
+`.roleicon <role> <emoji>` - Change a role icon (OS only)
 `.vcinfo [channel]` - Show voice channel info
 `.avatar [@user]` - Show user's avatar
 `.banner [@user]` - Show user's banner
@@ -5072,6 +5184,7 @@ def get_help_module_embed(selected):
 `.serverinfo` - Show server details
 `.userinfo [@user]` - Show user info
 `.roleinfo @role` - Show role info
+`.roleicon <role> <emoji>` - Change a role icon (OS only)
 `.vcinfo [channel]` - Show voice channel info
 `.avatar [@user]` - Show user's avatar
 `.banner [@user]` - Show user's banner
@@ -5184,6 +5297,7 @@ Leaderboard
 ▶ `setup role <role>` - Save base role
 ▶ `setup role remove <role>` - Remove base role
 ▶ `setup role show` - Show saved role
+▶ `.roleicon <role> <emoji>` - Change a role icon (OS only)
             """
         )
 
