@@ -203,6 +203,7 @@ DEFAULT_PERMISSION_ROLE_LINKS = (
     (ARCANE_SQUIRE_ROLE_ID, MEDIA_ROLE_ID),
     (WIZARDS_ROLE_ID, MEDIA_ROLE_ID),
 )
+PERMISSION_BUNDLE_SOURCE_ROLE_IDS = {source_role_id for source_role_id, _ in DEFAULT_PERMISSION_ROLE_LINKS}
 IST = timezone(timedelta(hours=5, minutes=30))
 AUTORESPONDER_COOLDOWN_SECONDS = 2
 autoresponder_cooldowns = {}
@@ -2125,6 +2126,12 @@ async def sync_permission_bundle_roles_for_all_guilds():
             await ensure_permission_bundle_roles(member)
 
 
+def permission_bundle_source_roles_changed(before, after):
+    before_source_ids = {role.id for role in before.roles if role.id in PERMISSION_BUNDLE_SOURCE_ROLE_IDS}
+    after_source_ids = {role.id for role in after.roles if role.id in PERMISSION_BUNDLE_SOURCE_ROLE_IDS}
+    return before_source_ids != after_source_ids
+
+
 async def handle_role_toggle(message):
     if not message.guild:
         await message.channel.send("Role changes only work inside a server.")
@@ -2763,7 +2770,6 @@ async def on_ready():
     await ensure_ticket_panel()
     await ensure_verification_panel()
     await sync_peasant_roles_for_all_guilds()
-    await sync_permission_bundle_roles_for_all_guilds()
     # Cache all server invites
     for guild in bot.guilds:
         await cache_server_invites(guild)
@@ -2863,7 +2869,8 @@ async def on_member_update(before, after):
         return
 
     await ensure_peasant_role(after)
-    await ensure_permission_bundle_roles(after)
+    if permission_bundle_source_roles_changed(before, after):
+        await ensure_permission_bundle_roles(after)
 
 
 # ===== TEMP VC SYSTEM =====
