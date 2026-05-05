@@ -95,6 +95,7 @@ MEDIA_ONLY_CHANNEL_ID = 1379065330957160560
 ONBOARDING_CATEGORY_ID = 1379780404894236744
 CHANT_TO_START_CHANNEL_ID = 1379780588193448027
 SECURITY_VERIFICATION_CHANNEL_ID = 1442881449434026045
+JOIN_LEAVE_LOG_CHANNEL_ID = 1501152051659542599
 BLOCKED_WIZARDS_CATEGORY_IDS = {
     1391451602178801766,
     1379076786226462772,
@@ -235,7 +236,6 @@ giveaways = {}  # {message_id: {"message_id": int, "channel_id": int, "guild_id"
 spam_tracker = defaultdict(list)  # {user_id: [timestamps]}
 SPAM_THRESHOLD = 5  # messages in SPAM_WINDOW
 SPAM_WINDOW = 5  # seconds
-SPAM_MUTE_DURATION = 300  # 5 minutes
 # ===== MODERATION CONFIG =====
 warnings = defaultdict(lambda: defaultdict(int))  # {guild_id: {user_id: count}}
 moderation_logs = defaultdict(list)  # {guild_id: [log_entries]}
@@ -1366,6 +1366,9 @@ class MemberOrID(commands.Converter):
 
 def log_moderation_action(guild_id, action, moderator, target, reason=""):
     """Log moderation actions"""
+    if action in {"mute", "unmute", "spam_mute"}:
+        return
+
     entry = {
         "action": action,
         "moderator": str(moderator),
@@ -1698,6 +1701,20 @@ async def ensure_verification_panel():
 
     try:
         await send_or_update_verification_panel(channel)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
+async def send_join_leave_log(guild, content):
+    channel = guild.get_channel(JOIN_LEAVE_LOG_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(JOIN_LEAVE_LOG_CHANNEL_ID)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return
+
+    try:
+        await channel.send(content)
     except (discord.Forbidden, discord.HTTPException):
         pass
 
@@ -2815,6 +2832,7 @@ async def on_ready():
 async def on_member_join(member):
     """Handle member join and track invites"""
     guild = member.guild
+    inviter_display = "Unknown"
 
     unverified_role = guild.get_role(UNVERIFIED_ROLE_ID)
     if unverified_role is not None and not member.bot:
@@ -2862,6 +2880,7 @@ async def on_member_join(member):
         if used_invite and used_invite.inviter:
             # Update inviter stats
             inviter_id = used_invite.inviter.id
+            inviter_display = used_invite.inviter.mention
             prior_joins_for_member = await get_user_invite_event_count(guild.id, member.id, "join")
             
             # Update database
@@ -2877,6 +2896,12 @@ async def on_member_join(member):
     except Exception as e:
         print(f"Error tracking invite for {member}: {e}")
 
+    if not member.bot:
+        await send_join_leave_log(
+            guild,
+            f"{member.mention} joined. Invited by {inviter_display}."
+        )
+
 
 @bot.event
 async def on_member_remove(member):
@@ -2884,18 +2909,29 @@ async def on_member_remove(member):
         return
 
     inviter_id = await get_inviter(member.guild.id, member.id)
-    if not inviter_id:
-        return
+    inviter_display = "Unknown"
+    if inviter_id:
+        inviter = member.guild.get_member(inviter_id)
+        if inviter is not None:
+            inviter_display = inviter.mention
+        else:
+            inviter_display = f"<@{inviter_id}>"
 
     try:
-        await log_invite_event(member.guild.id, member.id, inviter_id, "leave")
+        if inviter_id:
+            await log_invite_event(member.guild.id, member.id, inviter_id, "leave")
 
-        if member.joined_at is not None:
-            time_in_server = datetime.now(timezone.utc) - member.joined_at
-            if time_in_server <= timedelta(days=1):
-                await log_invite_event(member.guild.id, member.id, inviter_id, "fake")
+            if member.joined_at is not None:
+                time_in_server = datetime.now(timezone.utc) - member.joined_at
+                if time_in_server <= timedelta(days=1):
+                    await log_invite_event(member.guild.id, member.id, inviter_id, "fake")
     except Exception as e:
         print(f"Error tracking leave invite stats for {member}: {e}")
+
+    await send_join_leave_log(
+        member.guild,
+        f"{member} left. Invited by {inviter_display}."
+    )
 
 
 @bot.event
@@ -3642,95 +3678,27 @@ async def warn_command(ctx, member: MemberOrID, *, reason="No reason provided"):
 
     await ctx.send(embed=embed)
 
-    # Auto-mute after 3 warnings
-    if warn_count >= 3:
-        await mute_member(ctx, member, reason="Auto-mute: 3 warnings")
-
-
 @bot.command(name="mute")
 async def mute_command(ctx, member: MemberOrID, duration: str = "10m", *, reason="No reason provided"):
-    """Mute a member (duration: 1m, 1h, 1d, etc.)"""
-    if not can_use_command_role(ctx.author, MUTE_ROLE_ID, OS_ROLE_ID):
-        await ctx.send(embed=build_moderation_embed(ctx, "Mute Failed", "You do not have the required role to use this command.", success=False))
-        return
-
-    await mute_member(ctx, member, duration, reason)
+    """Mute command disabled."""
+    await ctx.send(embed=build_moderation_embed(ctx, "Mute Disabled", "This bot no longer mutes members.", success=False))
 
 
 async def mute_member(ctx, member: discord.Member, duration: str = "10m", reason="No reason provided"):
-    """Internal function to mute a member"""
-    if member == ctx.author:
-        await ctx.send(embed=build_moderation_embed(ctx, "Mute Failed", "You cannot mute yourself.", success=False))
-        return
-
-    # Parse duration
-    duration_map = {"m": 60, "h": 3600, "d": 86400}
-    try:
-        num = int(duration[:-1])
-        unit = duration[-1].lower()
-        seconds = num * duration_map.get(unit, 60)
-    except:
-        seconds = 600  # Default 10 minutes
-
-    mute_duration = timedelta(seconds=seconds)
-
-    try:
-        await member.timeout(mute_duration, reason=reason)
-        log_moderation_action(ctx.guild.id, "mute", ctx.author, member, reason)
-        embed = build_moderation_embed(ctx, "User Muted", f"Muted {member.mention} for {duration}")
-        embed.add_field(name="Reason", value=reason, inline=False)
-        await ctx.send(embed=embed)
-    except discord.Forbidden:
-        await ctx.send(embed=build_moderation_embed(ctx, "Mute Failed", "I don't have permission to mute this member.", success=False))
+    """Internal mute helper disabled."""
+    await ctx.send(embed=build_moderation_embed(ctx, "Mute Disabled", "This bot no longer mutes members.", success=False))
 
 
 @bot.command(name="unmute")
 async def unmute_command(ctx, *, target: str):
-    """Unmute a member or everyone currently timed out"""
-    if not can_use_command_role(ctx.author, MUTE_ROLE_ID, OS_ROLE_ID):
-        await ctx.send(embed=build_moderation_embed(ctx, "Unmute Failed", "You do not have the required role to use this command.", success=False))
-        return
-
-    if target.lower() == "all":
-        timed_out_members = [member for member in ctx.guild.members if member.is_timed_out()]
-        if not timed_out_members:
-            await ctx.send(embed=build_moderation_embed(ctx, "Unmute All", "No muted members found in this server.", success=False))
-            return
-
-        unmuted_count = 0
-        failed_count = 0
-        for member in timed_out_members:
-            try:
-                await member.timeout(None, reason=f"Mass unmute by {ctx.author}")
-                log_moderation_action(ctx.guild.id, "unmute", ctx.author, member, "Mass unmute")
-                unmuted_count += 1
-            except discord.Forbidden:
-                failed_count += 1
-
-        description = f"Unmuted {unmuted_count} member(s)."
-        if failed_count:
-            description += f" Failed to unmute {failed_count} member(s)."
-        await ctx.send(embed=build_moderation_embed(ctx, "Unmute All", description, success=unmuted_count > 0))
-        return
-
-    try:
-        member = await MemberOrID().convert(ctx, target)
-    except commands.MemberNotFound:
-        await ctx.send(embed=build_moderation_embed(ctx, "Unmute Failed", "Member not found. Use `.unmute <@user | user_id | all>`.", success=False))
-        return
-
-    try:
-        await member.timeout(None)
-        log_moderation_action(ctx.guild.id, "unmute", ctx.author, member, "Manual unmute")
-        await ctx.send(embed=build_moderation_embed(ctx, "User Unmuted", f"Unmuted {member.mention}"))
-    except discord.Forbidden:
-        await ctx.send(embed=build_moderation_embed(ctx, "Unmute Failed", "I don't have permission to unmute this member.", success=False))
+    """Unmute command disabled."""
+    await ctx.send(embed=build_moderation_embed(ctx, "Unmute Disabled", "This bot no longer manages mutes.", success=False))
 
 
 @unmute_command.error
 async def unmute_command_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(embed=build_moderation_embed(ctx, "Missing required argument(s).", "Usage: `.unmute <@user | user_id | all>`", success=False))
+        await ctx.send(embed=build_moderation_embed(ctx, "Unmute Disabled", "This bot no longer manages mutes.", success=False))
         return
     raise error
 
@@ -4546,29 +4514,14 @@ async def on_message(message):
         spam_tracker[message.author.id].append(datetime.now(timezone.utc))
         
         if check_spam(message.author.id):
-            # User is spamming
             try:
-                # Timeout the user
-                await message.author.timeout(
-                    timedelta(seconds=SPAM_MUTE_DURATION),
-                    reason="Spam detection"
-                )
-                log_moderation_action(
-                    message.guild.id,
-                    "spam_mute",
-                    "System",
-                    message.author,
-                    "Automatic spam detection"
-                )
-                
                 embed = discord.Embed(
                     title="🚫 Spam Detected",
-                    description=f"{message.author.mention} has been muted for spam.",
-                    color=discord.Color.red()
+                    description=f"{message.author.mention} spam message removed.",
+                    color=discord.Color.orange()
                 )
                 await message.channel.send(embed=embed, delete_after=10)
                 
-                # Delete the spam messages
                 await message.delete()
                 return
             except:
@@ -4736,8 +4689,8 @@ class ModuleView(discord.ui.View):
                 color=discord.Color.from_str("#2b2d31"),
                 description="""
 `.warn @user [reason]` - Warn a member
-`.mute @user [duration]` - Mute a member (e.g., 10m, 1h)
-`.unmute @user` - Unmute a member
+`.mute @user [duration]` - Disabled
+`.unmute @user` - Disabled
 `.kick @user [reason]` - Kick a member
 `.ban @user [reason]` - Ban a member
 `.purge [amount]` - Delete messages
@@ -4848,7 +4801,7 @@ Leaderboard
                 title="⚡ Features",
                 color=discord.Color.from_str("#2b2d31"),
                 description="""
-✅ **Spam Protection** - Auto-mutes spammers
+✅ **Spam Protection** - Removes detected spam messages
 ✅ **Raid Detection** - Detects mass joins
 ✅ **AFK System** - Manage AFK status
 ✅ **Bad Word Filter** - Filters profanity
@@ -4893,8 +4846,8 @@ class HelpView(discord.ui.View):
                 color=discord.Color.from_str("#2b2d31"),
                 description="""
 `.warn @user [reason]` - Warn a member
-`.mute @user [duration]` - Mute a member (e.g., 10m, 1h)
-`.unmute @user` - Unmute a member
+`.mute @user [duration]` - Disabled
+`.unmute @user` - Disabled
 `.kick @user [reason]` - Kick a member
 `.ban @user [reason]` - Ban a member
 `.purge [amount]` - Delete messages
@@ -5005,7 +4958,7 @@ Leaderboard
                 title="⚡ Features",
                 color=discord.Color.from_str("#2b2d31"),
                 description="""
-✅ **Spam Protection** - Auto-mutes spammers
+✅ **Spam Protection** - Removes detected spam messages
 ✅ **Raid Detection** - Detects mass joins
 ✅ **AFK System** - Manage AFK status
 ✅ **Bad Word Filter** - Filters profanity
@@ -5053,8 +5006,8 @@ def get_help_module_embed(selected):
             color=discord.Color.from_str("#2b2d31"),
             description="""
 `.warn @user [reason]` - Warn a member
-`.mute @user [duration]` - Mute a member (e.g., 10m, 1h)
-`.unmute @user` - Unmute a member
+`.mute @user [duration]` - Disabled
+`.unmute @user` - Disabled
 `.kick @user [reason]` - Kick a member
 `.ban @user [reason]` - Ban a member
 `.purge [amount]` - Delete messages
