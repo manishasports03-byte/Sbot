@@ -2826,6 +2826,23 @@ async def on_member_join(member):
         except discord.HTTPException:
             print(f"Failed to assign unverified role for {member}")
 
+    if not member.bot:
+        verification_channel = guild.get_channel(SECURITY_VERIFICATION_CHANNEL_ID)
+        if verification_channel is None:
+            try:
+                verification_channel = await bot.fetch_channel(SECURITY_VERIFICATION_CHANNEL_ID)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                verification_channel = None
+
+        if verification_channel is not None:
+            try:
+                await verification_channel.send(
+                    f"{member.mention} please verify here",
+                    delete_after=4
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                print(f"Failed to send verification ping for {member}")
+
     # ===== INVITE TRACKING =====
     try:
         # Get current invites
