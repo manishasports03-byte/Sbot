@@ -3550,7 +3550,7 @@ async def slowmode_command(ctx, seconds: int = 0):
 @bot.command(name="remind")
 @commands.has_permissions(manage_guild=True)
 async def remind_command(ctx, *, text_and_user: str):
-    """Ping a specific member with a manual reminder."""
+    """Ping a server member or DM a user by ID with a manual reminder."""
     parts = text_and_user.rsplit(" ", 1)
     if len(parts) != 2:
         await ctx.send(embed=build_automation_embed(
@@ -3573,16 +3573,6 @@ async def remind_command(ctx, *, text_and_user: str):
         return
 
     user_id = int(user_id_match.group(1) or user_id_match.group(2))
-    member = ctx.guild.get_member(user_id) if ctx.guild else None
-    if member is None:
-        await ctx.send(embed=build_automation_embed(
-            ctx,
-            "Reminder",
-            "That user is not in this server or I could not find them here.",
-            success=False,
-        ))
-        return
-
     reminder_text = message_text.strip()
     if not reminder_text:
         await ctx.send(embed=build_automation_embed(
@@ -3593,10 +3583,57 @@ async def remind_command(ctx, *, text_and_user: str):
         ))
         return
 
-    await ctx.send(
-        f"{member.mention} {reminder_text}",
-        allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
-    )
+    member = ctx.guild.get_member(user_id) if ctx.guild else None
+    if member is not None:
+        await ctx.send(
+            f"{member.mention} {reminder_text}",
+            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+        )
+        return
+
+    try:
+        user = await bot.fetch_user(user_id)
+    except discord.NotFound:
+        await ctx.send(embed=build_automation_embed(
+            ctx,
+            "Reminder",
+            "I could not find a Discord user with that ID.",
+            success=False,
+        ))
+        return
+    except discord.HTTPException:
+        await ctx.send(embed=build_automation_embed(
+            ctx,
+            "Reminder",
+            "I could not fetch that user right now.",
+            success=False,
+        ))
+        return
+
+    try:
+        await user.send(reminder_text)
+    except discord.Forbidden:
+        await ctx.send(embed=build_automation_embed(
+            ctx,
+            "Reminder",
+            "I found the user, but Discord is blocking DMs to them.",
+            success=False,
+        ))
+        return
+    except discord.HTTPException:
+        await ctx.send(embed=build_automation_embed(
+            ctx,
+            "Reminder",
+            "I could not send the DM right now.",
+            success=False,
+        ))
+        return
+
+    await ctx.send(embed=build_automation_embed(
+        ctx,
+        "Reminder",
+        f"Sent a DM reminder to `{user}`.",
+    ))
 
 
 @remind_command.error
