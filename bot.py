@@ -76,6 +76,7 @@ NO_PREFIX_COMMANDS = {
     "autoresponder", "autoreact", "sticky",
     "lb", "leaderboard",
     "warn", "mute", "unmute", "kick", "ban", "purge", "slowmode",
+    "remind",
     "gstart", "gend", "greroll",
     "steal", "roleicon",
 }
@@ -3546,6 +3547,71 @@ async def slowmode_command(ctx, seconds: int = 0):
         await ctx.send(embed=build_moderation_embed(ctx, "Slowmode Failed", "I don't have permission to modify this channel.", success=False))
 
 
+@bot.command(name="remind")
+@commands.has_permissions(manage_guild=True)
+async def remind_command(ctx, *, text_and_user: str):
+    """Ping a specific member with a manual reminder."""
+    parts = text_and_user.rsplit(" ", 1)
+    if len(parts) != 2:
+        await ctx.send(embed=build_automation_embed(
+            ctx,
+            "Reminder",
+            "Usage: `.remind <message> <user_id>`",
+            success=False,
+        ))
+        return
+
+    message_text, raw_target = parts
+    user_id_match = re.fullmatch(r"<@!?(\d+)>|(\d+)", raw_target)
+    if user_id_match is None:
+        await ctx.send(embed=build_automation_embed(
+            ctx,
+            "Reminder",
+            "Put the target user ID at the end. Example: `.remind Giveaway starting now 123456789012345678`",
+            success=False,
+        ))
+        return
+
+    user_id = int(user_id_match.group(1) or user_id_match.group(2))
+    member = ctx.guild.get_member(user_id) if ctx.guild else None
+    if member is None:
+        await ctx.send(embed=build_automation_embed(
+            ctx,
+            "Reminder",
+            "That user is not in this server or I could not find them here.",
+            success=False,
+        ))
+        return
+
+    reminder_text = message_text.strip()
+    if not reminder_text:
+        await ctx.send(embed=build_automation_embed(
+            ctx,
+            "Reminder",
+            "Reminder message cannot be empty.",
+            success=False,
+        ))
+        return
+
+    await ctx.send(
+        f"{member.mention} {reminder_text}",
+        allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+    )
+
+
+@remind_command.error
+async def remind_command_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(embed=build_automation_embed(
+            ctx,
+            "Reminder",
+            "Usage: `.remind <message> <user_id>`",
+            success=False,
+        ))
+        return
+    raise error
+
+
 @bot.group(name="autoresponder", invoke_without_command=True)
 @commands.has_permissions(manage_guild=True)
 async def autoresponder_command(ctx):
@@ -4480,6 +4546,7 @@ class ModuleView(discord.ui.View):
 `.uptime` - Show bot uptime
 `.botinfo` - Show bot information
 `.ping` - Show bot latency
+`.remind message user_id` - Ping a user with a reminder
 `.setprefix [new prefix]` - Change bot prefix
 `.deleteprefix` - Reset prefix
 `.gstart duration winners prize` - Start a giveaway
@@ -4637,6 +4704,7 @@ class HelpView(discord.ui.View):
 `.uptime` - Show bot uptime
 `.botinfo` - Show bot information
 `.ping` - Show bot latency
+`.remind message user_id` - Ping a user with a reminder
 `.setprefix [new prefix]` - Change bot prefix
 `.deleteprefix` - Reset prefix
 `.gstart duration winners prize` - Start a giveaway
