@@ -3,7 +3,7 @@ import random
 import re
 import copy
 import io
-import asyncpg
+import json
 import aiohttp
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
@@ -36,6 +36,24 @@ bad_words = ["mc", "bc", "madarchod", "bhosdike", "chutiya", "idiot", "stupid"]
 
 # ===== INVITE TRACKING CONFIG =====
 db = None
+storage_lock = asyncio.Lock()
+DATA_DIR = "data"
+DATA_FILE = os.path.join(DATA_DIR, "bot_storage.json")
+DEFAULT_STORAGE = {
+    "invite_stats": {},
+    "inviter_map": {},
+    "invite_events": [],
+    "message_stats": {},
+    "message_blacklist": {},
+    "bot_state": {},
+    "guild_settings": {},
+    "afk_users": {},
+    "autoresponders": {},
+    "auto_reactions": {},
+    "sticky_messages": {},
+    "birthday_users": {},
+}
+storage_data = {}
 guild_prefix_cache = {}
 server_invites = {}  # {guild_id: {invite_code: invite_object}}
 INVITE_UI_COLOR = discord.Color.from_str("#2b2d31")
@@ -255,456 +273,256 @@ def message_has_blocked_link(message_content):
 
 
 async def load_guild_prefixes():
-    """Load guild prefixes from PostgreSQL into cache."""
+    """Load guild prefixes from local storage into cache."""
     guild_prefix_cache.clear()
-    rows = await db_fetch("SELECT guild_id, prefix FROM guild_settings", log_fetch=False) or []
-    for row in rows:
-        guild_prefix_cache[row["guild_id"]] = row["prefix"] or DEFAULT_PREFIX
+    for guild_id, prefix in storage_data.get("guild_settings", {}).items():
+        try:
+            guild_prefix_cache[int(guild_id)] = prefix or DEFAULT_PREFIX
+        except (TypeError, ValueError):
+            continue
 
 
-async def db_execute(query, *args, log_context=None):
-    if db is None:
-        print("DATABASE ERROR: database pool is not available")
-        return None
-    try:
-        async with db.acquire() as conn:
-            result = await conn.execute(query, *args)
-            if log_context:
-                print(log_context)
-            return result
-    except Exception as e:
-        print("DATABASE ERROR:", e)
-        return None
+def ensure_storage_defaults(data):
+    normalized = copy.deepcopy(DEFAULT_STORAGE)
+    if isinstance(data, dict):
+        for key, default_value in DEFAULT_STORAGE.items():
+            value = data.get(key, copy.deepcopy(default_value))
+            if isinstance(default_value, dict):
+                normalized[key] = value if isinstance(value, dict) else {}
+            elif isinstance(default_value, list):
+                normalized[key] = value if isinstance(value, list) else []
+            else:
+                normalized[key] = value
+    return normalized
 
 
-async def db_fetch(query, *args, log_fetch=True):
-    if db is None:
-        print("DATABASE ERROR: database pool is not available")
-        return []
-    try:
-        async with db.acquire() as conn:
-            result = await conn.fetch(query, *args)
-            if log_fetch:
-                print("Fetched data:", result)
-            return result
-    except Exception as e:
-        print("DATABASE ERROR:", e)
-        return []
-
-
-async def db_fetchrow(query, *args, log_fetch=True):
-    if db is None:
-        print("DATABASE ERROR: database pool is not available")
-        return None
-    try:
-        async with db.acquire() as conn:
-            result = await conn.fetchrow(query, *args)
-            if log_fetch:
-                print("Fetched data:", result)
-            return result
-    except Exception as e:
-        print("DATABASE ERROR:", e)
-        return None
-
-
-async def db_fetchval(query, *args, log_fetch=True):
-    if db is None:
-        print("DATABASE ERROR: database pool is not available")
-        return None
-    try:
-        async with db.acquire() as conn:
-            result = await conn.fetchval(query, *args)
-            if log_fetch:
-                print("Fetched data:", result)
-            return result
-    except Exception as e:
-        print("DATABASE ERROR:", e)
-        return None
+async def save_storage():
+    os.makedirs(DATA_DIR, exist_ok=True)
+    async with storage_lock:
+        temp_path = f"{DATA_FILE}.tmp"
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(storage_data, handle, indent=2, ensure_ascii=True)
+        os.replace(temp_path, DATA_FILE)
 
 
 async def create_tables():
-    """Initialize PostgreSQL tables for persistent bot stats"""
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS invite_stats (
-            guild_id BIGINT,
-            user_id BIGINT,
-            invites INTEGER DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id)
-        )
-    """)
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS inviter_map (
-            guild_id BIGINT,
-            user_id BIGINT,
-            inviter_id BIGINT,
-            PRIMARY KEY (guild_id, user_id)
-        )
-    """)
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS invite_events (
-            id BIGSERIAL PRIMARY KEY,
-            guild_id BIGINT,
-            user_id BIGINT,
-            inviter_id BIGINT,
-            event_type TEXT,
-            created_at TIMESTAMPTZ DEFAULT NOW()
-        )
-    """)
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS message_stats (
-            guild_id BIGINT,
-            user_id BIGINT,
-            messages INTEGER DEFAULT 0,
-            daily_messages INTEGER DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id)
-        )
-    """)
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS message_blacklist (
-            guild_id BIGINT,
-            channel_id BIGINT,
-            PRIMARY KEY (guild_id, channel_id)
-        )
-    """)
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS bot_state (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS guild_settings (
-            guild_id BIGINT PRIMARY KEY,
-            prefix TEXT DEFAULT '.'
-        )
-    """)
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS afk_users (
-            guild_id BIGINT,
-            user_id BIGINT,
-            reason TEXT,
-            timestamp BIGINT,
-            PRIMARY KEY (guild_id, user_id)
-        )
-    """)
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS autoresponders (
-            guild_id BIGINT,
-            trigger TEXT,
-            response TEXT,
-            PRIMARY KEY (guild_id, trigger)
-        )
-    """)
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS auto_reactions (
-            guild_id BIGINT,
-            trigger TEXT,
-            emoji TEXT,
-            PRIMARY KEY (guild_id, trigger)
-        )
-    """)
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS sticky_messages (
-            guild_id BIGINT PRIMARY KEY,
-            message TEXT
-        )
-    """)
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS birthday_users (
-            guild_id BIGINT,
-            user_id BIGINT,
-            birth_month INTEGER,
-            birth_day INTEGER,
-            PRIMARY KEY (guild_id, user_id)
-        )
-    """)
-    print("Tables ensured/created")
+    """Ensure the local storage file exists."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    if not os.path.exists(DATA_FILE):
+        await save_storage()
+    print("Local storage ensured")
 
 
 async def connect_db():
-    global db
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        print("DATABASE ERROR: DATABASE_URL is not set")
-        return
-
+    global db, storage_data
     if db is not None:
         return
 
-    print("Connecting to PostgreSQL...")
-    try:
-        db = await asyncpg.create_pool(database_url)
-        print("PostgreSQL connected successfully")
-        await create_tables()
-        await load_guild_prefixes()
-        await load_afk_users()
-        print("Database initialized successfully")
-    except Exception as e:
-        db = None
-        print("DATABASE ERROR:", e)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as handle:
+                loaded_data = json.load(handle)
+        except Exception as e:
+            print("STORAGE ERROR:", e)
+            loaded_data = {}
+    else:
+        loaded_data = {}
+
+    storage_data = ensure_storage_defaults(loaded_data)
+    db = storage_data
+    await create_tables()
+    await load_guild_prefixes()
+    await load_afk_users()
+    print(f"Local storage initialized successfully: {DATA_FILE}")
 
 async def get_invites(guild_id, user_id):
     """Get invite count for a user."""
-    return await db_fetchval(
-        "SELECT invites FROM invite_stats WHERE guild_id = $1 AND user_id = $2",
-        guild_id,
-        user_id,
-    ) or 0
+    return int(
+        storage_data.get("invite_stats", {})
+        .get(str(guild_id), {})
+        .get(str(user_id), 0)
+    )
 
 
 async def add_invites(guild_id, user_id, amount):
     """Add invites to a user."""
     current = await get_invites(guild_id, user_id)
     new_total = max(0, current + amount)
-    await db_execute(
-        """
-        INSERT INTO invite_stats (guild_id, user_id, invites)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (guild_id, user_id)
-        DO UPDATE SET invites = EXCLUDED.invites
-        """,
-        guild_id,
-        user_id,
-        new_total,
-        log_context=f"Saved invites for user: {user_id}",
-    )
+    guild_stats = storage_data.setdefault("invite_stats", {}).setdefault(str(guild_id), {})
+    guild_stats[str(user_id)] = new_total
+    await save_storage()
+    print(f"Saved invites for user: {user_id}")
     return new_total
 
 
 async def set_inviter(guild_id, user_id, inviter_id):
     """Set who invited a user."""
-    await db_execute(
-        """
-        INSERT INTO inviter_map (guild_id, user_id, inviter_id)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (guild_id, user_id)
-        DO UPDATE SET inviter_id = EXCLUDED.inviter_id
-        """,
-        guild_id,
-        user_id,
-        inviter_id,
-        log_context=f"Saved inviter mapping for user: {user_id}",
-    )
+    guild_inviter_map = storage_data.setdefault("inviter_map", {}).setdefault(str(guild_id), {})
+    guild_inviter_map[str(user_id)] = inviter_id
+    await save_storage()
+    print(f"Saved inviter mapping for user: {user_id}")
 
 
 async def get_inviter(guild_id, user_id):
     """Get who invited a user."""
-    return await db_fetchval(
-        "SELECT inviter_id FROM inviter_map WHERE guild_id = $1 AND user_id = $2",
-        guild_id,
-        user_id,
+    inviter_id = (
+        storage_data.get("inviter_map", {})
+        .get(str(guild_id), {})
+        .get(str(user_id))
     )
+    return int(inviter_id) if inviter_id is not None else None
 
 
 async def get_invited_users(guild_id, inviter_id):
     """Get list of users invited by someone."""
-    rows = await db_fetch(
-        "SELECT user_id FROM inviter_map WHERE guild_id = $1 AND inviter_id = $2 ORDER BY user_id",
-        guild_id,
-        inviter_id,
-    )
-    return [row["user_id"] for row in rows]
+    invited_users = []
+    for user_id, saved_inviter_id in storage_data.get("inviter_map", {}).get(str(guild_id), {}).items():
+        if int(saved_inviter_id) == inviter_id:
+            invited_users.append(int(user_id))
+    return sorted(invited_users)
 
 
 async def log_invite_event(guild_id, user_id, inviter_id, event_type):
-    await db_execute(
-        """
-        INSERT INTO invite_events (guild_id, user_id, inviter_id, event_type)
-        VALUES ($1, $2, $3, $4)
-        """,
-        guild_id,
-        user_id,
-        inviter_id,
-        event_type,
-        log_context=f"Logged invite event {event_type} for user: {user_id}",
+    storage_data.setdefault("invite_events", []).append(
+        {
+            "guild_id": guild_id,
+            "user_id": user_id,
+            "inviter_id": inviter_id,
+            "event_type": event_type,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
     )
+    await save_storage()
+    print(f"Logged invite event {event_type} for user: {user_id}")
 
 
 async def get_invite_event_count(guild_id, inviter_id, event_type, since=None):
-    if since is None:
-        return await db_fetchval(
-            """
-            SELECT COUNT(*)
-            FROM invite_events
-            WHERE guild_id = $1 AND inviter_id = $2 AND event_type = $3
-            """,
-            guild_id,
-            inviter_id,
-            event_type,
-            log_fetch=False,
-        ) or 0
-
-    return await db_fetchval(
-        """
-        SELECT COUNT(*)
-        FROM invite_events
-        WHERE guild_id = $1 AND inviter_id = $2 AND event_type = $3 AND created_at >= $4
-        """,
-        guild_id,
-        inviter_id,
-        event_type,
-        since,
-        log_fetch=False,
-    ) or 0
+    count = 0
+    for event in storage_data.get("invite_events", []):
+        if event.get("guild_id") != guild_id:
+            continue
+        if event.get("inviter_id") != inviter_id:
+            continue
+        if event.get("event_type") != event_type:
+            continue
+        if since is not None:
+            created_at_text = event.get("created_at")
+            if not created_at_text:
+                continue
+            try:
+                created_at = datetime.fromisoformat(created_at_text)
+            except ValueError:
+                continue
+            if created_at < since:
+                continue
+        count += 1
+    return count
 
 
 async def get_user_invite_event_count(guild_id, user_id, event_type):
-    return await db_fetchval(
-        """
-        SELECT COUNT(*)
-        FROM invite_events
-        WHERE guild_id = $1 AND user_id = $2 AND event_type = $3
-        """,
-        guild_id,
-        user_id,
-        event_type,
-        log_fetch=False,
-    ) or 0
+    return sum(
+        1
+        for event in storage_data.get("invite_events", [])
+        if event.get("guild_id") == guild_id
+        and event.get("user_id") == user_id
+        and event.get("event_type") == event_type
+    )
 
 
 async def get_leaderboard(guild_id, limit=10):
     """Get top inviters for a guild."""
-    if limit is None:
-        rows = await db_fetch(
-            "SELECT user_id, invites FROM invite_stats WHERE guild_id = $1 ORDER BY invites DESC, user_id ASC",
-            guild_id,
-        )
-    else:
-        rows = await db_fetch(
-            "SELECT user_id, invites FROM invite_stats WHERE guild_id = $1 ORDER BY invites DESC, user_id ASC LIMIT $2",
-            guild_id,
-            limit,
-        )
-    return [(row["user_id"], row["invites"]) for row in rows]
+    rows = sorted(
+        (
+            (int(user_id), int(invites))
+            for user_id, invites in storage_data.get("invite_stats", {}).get(str(guild_id), {}).items()
+        ),
+        key=lambda item: (-item[1], item[0]),
+    )
+    return rows if limit is None else rows[:limit]
 
 
 async def clear_invite_data(guild_id):
     """Clear all invite data for a guild."""
-    await db_execute("DELETE FROM invite_stats WHERE guild_id = $1", guild_id, log_context=f"Cleared invite stats for guild: {guild_id}")
-    await db_execute("DELETE FROM inviter_map WHERE guild_id = $1", guild_id, log_context=f"Cleared inviter map for guild: {guild_id}")
+    storage_data.setdefault("invite_stats", {}).pop(str(guild_id), None)
+    storage_data.setdefault("inviter_map", {}).pop(str(guild_id), None)
+    storage_data["invite_events"] = [
+        event for event in storage_data.get("invite_events", []) if event.get("guild_id") != guild_id
+    ]
+    await save_storage()
+    print(f"Cleared invite stats for guild: {guild_id}")
+    print(f"Cleared inviter map for guild: {guild_id}")
 
 
 async def reset_user_invites(guild_id, user_id):
     """Reset invite count for one user."""
-    await db_execute(
-        "DELETE FROM invite_stats WHERE guild_id = $1 AND user_id = $2",
-        guild_id,
-        user_id,
-        log_context=f"Reset invites for user: {user_id}",
-    )
+    storage_data.setdefault("invite_stats", {}).setdefault(str(guild_id), {}).pop(str(user_id), None)
+    await save_storage()
+    print(f"Reset invites for user: {user_id}")
 
 
 async def get_state_value(key):
-    return await db_fetchval("SELECT value FROM bot_state WHERE key = $1", key)
+    return storage_data.get("bot_state", {}).get(key)
 
 
 async def set_state_value(key, value):
-    await db_execute(
-        """
-        INSERT INTO bot_state (key, value)
-        VALUES ($1, $2)
-        ON CONFLICT (key)
-        DO UPDATE SET value = EXCLUDED.value
-        """,
-        key,
-        value,
-        log_context=f"Saved bot state key: {key}",
-    )
+    storage_data.setdefault("bot_state", {})[key] = value
+    await save_storage()
+    print(f"Saved bot state key: {key}")
 
 
 async def add_autoresponder(guild_id, trigger, response):
     normalized_trigger = trigger.lower()
-    await db_execute(
-        """
-        INSERT INTO autoresponders (guild_id, trigger, response)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (guild_id, trigger)
-        DO UPDATE SET response = EXCLUDED.response
-        """,
-        guild_id,
-        normalized_trigger,
-        response,
-        log_context=f"Saved autoresponder '{normalized_trigger}' for guild: {guild_id}",
-    )
+    storage_data.setdefault("autoresponders", {}).setdefault(str(guild_id), {})[normalized_trigger] = response
+    await save_storage()
+    print(f"Saved autoresponder '{normalized_trigger}' for guild: {guild_id}")
 
 
 async def remove_autoresponder(guild_id, trigger):
-    await db_execute(
-        "DELETE FROM autoresponders WHERE guild_id = $1 AND trigger = $2",
-        guild_id,
-        trigger.lower(),
-        log_context=f"Removed autoresponder '{trigger.lower()}' for guild: {guild_id}",
-    )
+    normalized_trigger = trigger.lower()
+    storage_data.setdefault("autoresponders", {}).setdefault(str(guild_id), {}).pop(normalized_trigger, None)
+    await save_storage()
+    print(f"Removed autoresponder '{normalized_trigger}' for guild: {guild_id}")
 
 
 async def get_autoresponders(guild_id):
-    rows = await db_fetch(
-        "SELECT trigger, response FROM autoresponders WHERE guild_id = $1 ORDER BY trigger ASC",
-        guild_id,
-    )
-    return [(row["trigger"], row["response"]) for row in rows]
+    responders = storage_data.get("autoresponders", {}).get(str(guild_id), {})
+    return sorted(responders.items(), key=lambda item: item[0])
 
 
 async def add_auto_reaction(guild_id, trigger, emoji):
     normalized_trigger = trigger.lower()
-    await db_execute(
-        """
-        INSERT INTO auto_reactions (guild_id, trigger, emoji)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (guild_id, trigger)
-        DO UPDATE SET emoji = EXCLUDED.emoji
-        """,
-        guild_id,
-        normalized_trigger,
-        emoji,
-        log_context=f"Saved autoreact '{normalized_trigger}' for guild: {guild_id}",
-    )
+    storage_data.setdefault("auto_reactions", {}).setdefault(str(guild_id), {})[normalized_trigger] = emoji
+    await save_storage()
+    print(f"Saved autoreact '{normalized_trigger}' for guild: {guild_id}")
 
 
 async def remove_auto_reaction(guild_id, trigger):
-    await db_execute(
-        "DELETE FROM auto_reactions WHERE guild_id = $1 AND trigger = $2",
-        guild_id,
-        trigger.lower(),
-        log_context=f"Removed autoreact '{trigger.lower()}' for guild: {guild_id}",
-    )
+    normalized_trigger = trigger.lower()
+    storage_data.setdefault("auto_reactions", {}).setdefault(str(guild_id), {}).pop(normalized_trigger, None)
+    await save_storage()
+    print(f"Removed autoreact '{normalized_trigger}' for guild: {guild_id}")
 
 
 async def get_auto_reactions(guild_id):
-    rows = await db_fetch(
-        "SELECT trigger, emoji FROM auto_reactions WHERE guild_id = $1 ORDER BY trigger ASC",
-        guild_id,
-    )
-    return [(row["trigger"], row["emoji"]) for row in rows]
+    reactions = storage_data.get("auto_reactions", {}).get(str(guild_id), {})
+    return sorted(reactions.items(), key=lambda item: item[0])
 
 
 async def set_sticky_message(guild_id, message):
-    await db_execute(
-        """
-        INSERT INTO sticky_messages (guild_id, message)
-        VALUES ($1, $2)
-        ON CONFLICT (guild_id)
-        DO UPDATE SET message = EXCLUDED.message
-        """,
-        guild_id,
-        message,
-        log_context=f"Saved sticky message for guild: {guild_id}",
-    )
+    storage_data.setdefault("sticky_messages", {})[str(guild_id)] = message
+    await save_storage()
+    print(f"Saved sticky message for guild: {guild_id}")
 
 
 async def remove_sticky_message(guild_id):
-    await db_execute(
-        "DELETE FROM sticky_messages WHERE guild_id = $1",
-        guild_id,
-        log_context=f"Removed sticky message for guild: {guild_id}",
-    )
+    storage_data.setdefault("sticky_messages", {}).pop(str(guild_id), None)
+    await save_storage()
+    print(f"Removed sticky message for guild: {guild_id}")
 
 
 async def get_sticky_message(guild_id):
-    return await db_fetchval(
-        "SELECT message FROM sticky_messages WHERE guild_id = $1",
-        guild_id,
-    )
+    return storage_data.get("sticky_messages", {}).get(str(guild_id))
 
 
 async def reset_daily_message_counts_if_needed():
@@ -713,53 +531,42 @@ async def reset_daily_message_counts_if_needed():
     if last_reset == today:
         return
 
-    await db_execute("UPDATE message_stats SET daily_messages = 0", log_context="Reset daily message counts")
+    for guild_stats in storage_data.get("message_stats", {}).values():
+        for user_stats in guild_stats.values():
+            user_stats["daily_messages"] = 0
+    await save_storage()
+    print("Reset daily message counts")
     await set_state_value(MESSAGE_DAILY_RESET_KEY, today)
 
 
 async def set_birthday(guild_id, user_id, birth_month, birth_day):
-    await db_execute(
-        """
-        INSERT INTO birthday_users (guild_id, user_id, birth_month, birth_day)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (guild_id, user_id)
-        DO UPDATE SET
-            birth_month = EXCLUDED.birth_month,
-            birth_day = EXCLUDED.birth_day
-        """,
-        guild_id,
-        user_id,
-        birth_month,
-        birth_day,
-        log_context=f"Saved birthday for user {user_id} in guild {guild_id}",
-    )
+    guild_birthdays = storage_data.setdefault("birthday_users", {}).setdefault(str(guild_id), {})
+    guild_birthdays[str(user_id)] = {"birth_month": birth_month, "birth_day": birth_day}
+    await save_storage()
+    print(f"Saved birthday for user {user_id} in guild {guild_id}")
 
 
 async def remove_birthday(guild_id, user_id):
-    await db_execute(
-        "DELETE FROM birthday_users WHERE guild_id = $1 AND user_id = $2",
-        guild_id,
-        user_id,
-        log_context=f"Removed birthday for user {user_id} in guild {guild_id}",
-    )
+    storage_data.setdefault("birthday_users", {}).setdefault(str(guild_id), {}).pop(str(user_id), None)
+    await save_storage()
+    print(f"Removed birthday for user {user_id} in guild {guild_id}")
 
 
 async def get_birthday(guild_id, user_id):
-    return await db_fetchrow(
-        "SELECT birth_month, birth_day FROM birthday_users WHERE guild_id = $1 AND user_id = $2",
-        guild_id,
-        user_id,
-        log_fetch=False,
+    return (
+        storage_data.get("birthday_users", {})
+        .get(str(guild_id), {})
+        .get(str(user_id))
     )
 
 
 async def get_birthdays_for_day(birth_month, birth_day):
-    return await db_fetch(
-        "SELECT guild_id, user_id FROM birthday_users WHERE birth_month = $1 AND birth_day = $2",
-        birth_month,
-        birth_day,
-        log_fetch=False,
-    )
+    matches = []
+    for guild_id, guild_birthdays in storage_data.get("birthday_users", {}).items():
+        for user_id, birthday in guild_birthdays.items():
+            if birthday.get("birth_month") == birth_month and birthday.get("birth_day") == birth_day:
+                matches.append({"guild_id": int(guild_id), "user_id": int(user_id)})
+    return matches
 
 
 def get_ist_today():
@@ -768,32 +575,27 @@ def get_ist_today():
 
 async def get_message_stats(guild_id, user_id):
     await reset_daily_message_counts_if_needed()
-    row = await db_fetchrow(
-        "SELECT messages, daily_messages FROM message_stats WHERE guild_id = $1 AND user_id = $2",
-        guild_id,
-        user_id,
+    row = (
+        storage_data.get("message_stats", {})
+        .get(str(guild_id), {})
+        .get(str(user_id))
     )
     if row:
-        return {"messages": row["messages"], "daily_messages": row["daily_messages"]}
+        return {
+            "messages": int(row.get("messages", 0)),
+            "daily_messages": int(row.get("daily_messages", 0)),
+        }
     return {"messages": 0, "daily_messages": 0}
 
 
 async def set_message_stats(guild_id, user_id, messages, daily_messages):
-    await db_execute(
-        """
-        INSERT INTO message_stats (guild_id, user_id, messages, daily_messages)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (guild_id, user_id)
-        DO UPDATE SET
-            messages = EXCLUDED.messages,
-            daily_messages = EXCLUDED.daily_messages
-        """,
-        guild_id,
-        user_id,
-        max(0, messages),
-        max(0, daily_messages),
-        log_context=f"Saved message stats for user: {user_id}",
-    )
+    guild_stats = storage_data.setdefault("message_stats", {}).setdefault(str(guild_id), {})
+    guild_stats[str(user_id)] = {
+        "messages": max(0, messages),
+        "daily_messages": max(0, daily_messages),
+    }
+    await save_storage()
+    print(f"Saved message stats for user: {user_id}")
 
 
 async def add_messages(guild_id, user_id, amount, update_daily=False):
@@ -836,7 +638,9 @@ async def leaderboard_messages(guild_id, column="messages", limit=10):
 
 
 async def clear_all_messages(guild_id):
-    await db_execute("DELETE FROM message_stats WHERE guild_id = $1", guild_id, log_context=f"Cleared message stats for guild: {guild_id}")
+    storage_data.setdefault("message_stats", {}).pop(str(guild_id), None)
+    await save_storage()
+    print(f"Cleared message stats for guild: {guild_id}")
 
 
 async def reset_user_messages(guild_id, user_id):
@@ -848,69 +652,43 @@ async def get_message_leaderboard(guild_id, column="messages", limit=10):
         return []
 
     await reset_daily_message_counts_if_needed()
-    if limit is None:
-        rows = await db_fetch(
-            f"""
-            SELECT user_id, {column}
-            FROM message_stats
-            WHERE guild_id = $1 AND {column} > 0
-            ORDER BY {column} DESC, user_id ASC
-            """,
-            guild_id,
-        )
-    else:
-        rows = await db_fetch(
-            f"""
-            SELECT user_id, {column}
-            FROM message_stats
-            WHERE guild_id = $1 AND {column} > 0
-            ORDER BY {column} DESC, user_id ASC
-            LIMIT $2
-            """,
-            guild_id,
-            limit,
-        )
-    return [(row["user_id"], row[column]) for row in rows]
+    rows = sorted(
+        (
+            (int(user_id), int(stats.get(column, 0)))
+            for user_id, stats in storage_data.get("message_stats", {}).get(str(guild_id), {}).items()
+            if int(stats.get(column, 0)) > 0
+        ),
+        key=lambda item: (-item[1], item[0]),
+    )
+    return rows if limit is None else rows[:limit]
 
 
 async def blacklist_message_channel(guild_id, channel_id):
-    await db_execute(
-        """
-        INSERT INTO message_blacklist (guild_id, channel_id)
-        VALUES ($1, $2)
-        ON CONFLICT (guild_id, channel_id) DO NOTHING
-        """,
-        guild_id,
-        channel_id,
-        log_context=f"Blacklisted message channel: {channel_id}",
-    )
+    guild_blacklist = storage_data.setdefault("message_blacklist", {}).setdefault(str(guild_id), [])
+    if channel_id not in guild_blacklist:
+        guild_blacklist.append(channel_id)
+        guild_blacklist.sort()
+        await save_storage()
+    print(f"Blacklisted message channel: {channel_id}")
 
 
 async def unblacklist_message_channel(guild_id, channel_id):
-    await db_execute(
-        "DELETE FROM message_blacklist WHERE guild_id = $1 AND channel_id = $2",
-        guild_id,
-        channel_id,
-        log_context=f"Unblacklisted message channel: {channel_id}",
-    )
+    guild_blacklist = storage_data.setdefault("message_blacklist", {}).setdefault(str(guild_id), [])
+    if channel_id in guild_blacklist:
+        guild_blacklist.remove(channel_id)
+        await save_storage()
+    print(f"Unblacklisted message channel: {channel_id}")
 
 
 async def get_blacklisted_channels(guild_id):
-    rows = await db_fetch(
-        "SELECT channel_id FROM message_blacklist WHERE guild_id = $1 ORDER BY channel_id",
-        guild_id,
+    return sorted(
+        int(channel_id)
+        for channel_id in storage_data.get("message_blacklist", {}).get(str(guild_id), [])
     )
-    return [row["channel_id"] for row in rows]
 
 
 async def is_message_channel_blacklisted(guild_id, channel_id):
-    return bool(
-        await db_fetchval(
-            "SELECT 1 FROM message_blacklist WHERE guild_id = $1 AND channel_id = $2",
-            guild_id,
-            channel_id,
-        )
-    )
+    return channel_id in storage_data.get("message_blacklist", {}).get(str(guild_id), [])
 
 
 def build_messages_embed(ctx, title, description):
@@ -1283,22 +1061,16 @@ class StealAssetView(discord.ui.View):
 
 
 async def set_guild_prefix(guild_id, prefix):
-    await db_execute(
-        """
-        INSERT INTO guild_settings (guild_id, prefix)
-        VALUES ($1, $2)
-        ON CONFLICT (guild_id)
-        DO UPDATE SET prefix = EXCLUDED.prefix
-        """,
-        guild_id,
-        prefix,
-        log_context=f"Saved guild prefix for guild: {guild_id}",
-    )
+    storage_data.setdefault("guild_settings", {})[str(guild_id)] = prefix
+    await save_storage()
+    print(f"Saved guild prefix for guild: {guild_id}")
     guild_prefix_cache[guild_id] = prefix
 
 
 async def delete_guild_prefix(guild_id):
-    await db_execute("DELETE FROM guild_settings WHERE guild_id = $1", guild_id, log_context=f"Deleted guild prefix for guild: {guild_id}")
+    storage_data.setdefault("guild_settings", {}).pop(str(guild_id), None)
+    await save_storage()
+    print(f"Deleted guild prefix for guild: {guild_id}")
     guild_prefix_cache.pop(guild_id, None)
 
 
@@ -1306,13 +1078,7 @@ async def get_guild_prefix(guild_id):
     if db is None:
         return DEFAULT_PREFIX
 
-    return (
-        await db_fetchval(
-            "SELECT prefix FROM guild_settings WHERE guild_id = $1",
-            guild_id,
-        )
-        or DEFAULT_PREFIX
-    )
+    return storage_data.get("guild_settings", {}).get(str(guild_id), DEFAULT_PREFIX) or DEFAULT_PREFIX
 
 
 def format_relative_duration(from_dt):
@@ -1426,21 +1192,10 @@ def cache_afk_state(guild_id, user_id, reason, timestamp, pings=None):
 
 
 async def save_afk_state(guild_id, user_id, reason, timestamp):
-    await db_execute(
-        """
-        INSERT INTO afk_users (guild_id, user_id, reason, timestamp)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (guild_id, user_id)
-        DO UPDATE SET
-            reason = EXCLUDED.reason,
-            timestamp = EXCLUDED.timestamp
-        """,
-        guild_id,
-        user_id,
-        reason,
-        timestamp,
-        log_context=f"Saved AFK state for user: {user_id}",
-    )
+    guild_afk = storage_data.setdefault("afk_users", {}).setdefault(str(guild_id), {})
+    guild_afk[str(user_id)] = {"reason": reason, "timestamp": timestamp}
+    await save_storage()
+    print(f"Saved AFK state for user: {user_id}")
     return cache_afk_state(guild_id, user_id, reason, timestamp)
 
 
@@ -1449,31 +1204,31 @@ async def get_afk_state(guild_id, user_id):
     if key in afk_users:
         return afk_users[key]
 
-    row = await db_fetchrow(
-        "SELECT reason, timestamp FROM afk_users WHERE guild_id = $1 AND user_id = $2",
-        guild_id,
-        user_id,
+    row = (
+        storage_data.get("afk_users", {})
+        .get(str(guild_id), {})
+        .get(str(user_id))
     )
     if not row:
         return None
-    return cache_afk_state(guild_id, user_id, row["reason"], row["timestamp"])
+    return cache_afk_state(guild_id, user_id, row.get("reason"), row.get("timestamp"))
 
 
 async def delete_afk_state(guild_id, user_id):
     afk_users.pop(afk_cache_key(guild_id, user_id), None)
-    await db_execute(
-        "DELETE FROM afk_users WHERE guild_id = $1 AND user_id = $2",
-        guild_id,
-        user_id,
-        log_context=f"Deleted AFK state for user: {user_id}",
-    )
+    storage_data.setdefault("afk_users", {}).setdefault(str(guild_id), {}).pop(str(user_id), None)
+    await save_storage()
+    print(f"Deleted AFK state for user: {user_id}")
 
 
 async def load_afk_users():
     afk_users.clear()
-    rows = await db_fetch("SELECT guild_id, user_id, reason, timestamp FROM afk_users")
-    for row in rows:
-        cache_afk_state(row["guild_id"], row["user_id"], row["reason"], row["timestamp"])
+    for guild_id, guild_afk in storage_data.get("afk_users", {}).items():
+        for user_id, row in guild_afk.items():
+            try:
+                cache_afk_state(int(guild_id), int(user_id), row.get("reason"), row.get("timestamp"))
+            except (TypeError, ValueError):
+                continue
 
 
 def format_duration(started_at):
@@ -3482,9 +3237,9 @@ async def deleteprefix_command(ctx):
 
 @bot.command(name="dbtest")
 async def dbtest_command(ctx):
-    """Temporary database verification command"""
+    """Temporary storage verification command"""
     if db is None:
-        await ctx.send("Database is not connected.")
+        await ctx.send("Local storage is not initialized.")
         return
 
     test_key = f"dbtest:{ctx.guild.id if ctx.guild else 0}:{ctx.author.id}"
@@ -3493,10 +3248,10 @@ async def dbtest_command(ctx):
     saved_value = await get_state_value(test_key)
 
     if saved_value == test_value:
-        await ctx.send("Database working correctly")
+        await ctx.send("Local storage working correctly")
         return
 
-    await ctx.send("Database test failed")
+    await ctx.send("Local storage test failed")
 
 
 @bot.command(name="gstart")
