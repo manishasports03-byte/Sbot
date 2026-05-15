@@ -3550,7 +3550,7 @@ async def slowmode_command(ctx, seconds: int = 0):
 @bot.command(name="remind")
 @commands.has_permissions(manage_guild=True)
 async def remind_command(ctx, *, text_and_user: str):
-    """Ping a server member or DM a user by ID with a manual reminder."""
+    """Send a manual reminder as a DM to a user by ID."""
     parts = text_and_user.rsplit(" ", 1)
     if len(parts) != 2:
         await ctx.send(embed=build_automation_embed(
@@ -3581,14 +3581,6 @@ async def remind_command(ctx, *, text_and_user: str):
             "Reminder message cannot be empty.",
             success=False,
         ))
-        return
-
-    member = ctx.guild.get_member(user_id) if ctx.guild else None
-    if member is not None:
-        await ctx.send(
-            f"{member.mention} {reminder_text}",
-            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
-        )
         return
 
     try:
